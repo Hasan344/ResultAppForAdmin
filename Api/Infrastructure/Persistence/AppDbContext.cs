@@ -28,13 +28,46 @@ public class AppDbContext : DbContext
     public DbSet<ImportBatch> ImportBatches => Set<ImportBatch>();
     public DbSet<Exercise> Exercises => Set<Exercise>();
     public DbSet<ScoringRule> ScoringRules => Set<ScoringRule>();
-    public DbSet<StudentExamResult> StudentExamResults => Set<StudentExamResult>();
-
+    public DbSet<StudentExamResult> StudentExamResults => Set<StudentExamResult>(); 
+    public DbSet<CommissionStageRule> CommissionStageRules => Set<CommissionStageRule>();
+    public DbSet<StudentAppealResult> StudentAppealResults => Set<StudentAppealResult>();
     // ── View (keyless) ──
     public DbSet<StudentTotalScoreView> StudentTotalScores => Set<StudentTotalScoreView>();
 
     protected override void OnModelCreating(ModelBuilder b)
     {
+        b.Entity<CommissionStageRule>(e =>
+         {
+             e.ToTable("commission_stage_rules");
+             e.HasKey(x => x.CommissionNo);
+             e.Property(x => x.CommissionNo).HasColumnName("commission_no").HasMaxLength(10);
+             e.Property(x => x.Stage1Total).HasColumnName("stage1_total");
+             e.Property(x => x.Stage1Required).HasColumnName("stage1_required");
+             e.Property(x => x.Stage2Total).HasColumnName("stage2_total");
+             e.Property(x => x.FinalMethod).HasColumnName("final_method").HasMaxLength(20);
+             e.Property(x => x.MinimumScore).HasColumnName("minimum_score");
+             e.Property(x => x.Notes).HasColumnName("notes");
+         });
+        b.Entity<StudentAppealResult>(e =>
+         {
+             e.ToTable("student_appeal_results");
+             e.HasKey(x => x.Id);
+             e.Property(x => x.Id).HasColumnName("id");
+             e.Property(x => x.StudentId).HasColumnName("student_id");
+             e.Property(x => x.ExamId).HasColumnName("exam_id");
+             e.Property(x => x.ExerciseId).HasColumnName("exercise_id");
+             e.Property(x => x.RawValue).HasColumnName("raw_value");
+             e.Property(x => x.AppealScore).HasColumnName("appeal_score");
+             e.Property(x => x.PreviousScore).HasColumnName("previous_score");
+             e.Property(x => x.Decision).HasColumnName("decision");
+             e.Property(x => x.Notes).HasColumnName("notes");
+             e.Property(x => x.RecordedBy).HasColumnName("recorded_by");
+             e.Property(x => x.RecordedAt).HasColumnName("recorded_at");
+             e.Property(x => x.UpdatedAt).HasColumnName("updated_at");
+             e.HasOne(x => x.Student).WithMany().HasForeignKey(x => x.StudentId);
+             e.HasOne(x => x.Exercise).WithMany().HasForeignKey(x => x.ExerciseId);
+             e.HasIndex(x => new { x.StudentId, x.ExerciseId }).IsUnique();
+         });
         // ─── EXISTING: tablo isimlerini tam map ─────────────────────────
         b.Entity<Exam>(e =>
         {

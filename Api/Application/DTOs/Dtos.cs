@@ -22,14 +22,20 @@ public record ExamDetailDto(
     int? StudentCount,
     string[] CommissionNos,
     int ExpertCount,
+    // Monitor counts by role (1=leader, 2=monitor, 4=volunteer, 5=other staff)
+    int MonitorTotalCount,
+    int LeaderCount,
     int MonitorCount,
+    int VolunteerCount,
+    int OtherStaffCount,
     int RepresentativeCount,
-    int RegisteredStudentCount);
+    int RegisteredStudentCount,
+    int? SectionId);
 
 // ─── Students ────────────────────────────────────────────────────────────
 public record StudentDto(
     int Id,
-    int SNomer,
+    int? SNomer,                      // ← nullable
     string IsN,
     string Surname,
     string Name,
@@ -42,6 +48,19 @@ public record StudentDto(
     string? AltNov,
     string CommissionNo,
     bool IsAttended);
+
+public record CommissionResultRowDto(
+    int StudentId,
+    int QrupNum,
+    int? SNomer,                      // ← nullable
+    string IsN,
+    string FullName,
+    byte Gender,
+    string Kodixtisas,
+    string? AltNov,
+    Dictionary<string, ResultDto?> ScoresByExerciseCode,
+    int? TotalScore,
+    bool IsPassed);
 
 // ─── Imports ─────────────────────────────────────────────────────────────
 public record ImportStudentsRequest(string CommissionNo, DateOnly ExamDate);
@@ -59,18 +78,6 @@ public record ResultDto(
     string? Notes,
     DateTime RecordedAt);
 
-public record CommissionResultRowDto(
-    int StudentId,
-    int QrupNum,
-    int SNomer,
-    string IsN,
-    string FullName,
-    byte Gender,
-    string Kodixtisas,
-    string? AltNov,
-    Dictionary<string, ResultDto?> ScoresByExerciseCode,   // key = exercise.Code
-    int? TotalScore,
-    bool IsPassed);
 
 // ─── Scoring rules (admin) ───────────────────────────────────────────────
 public record ScoringRuleDto(

@@ -9,7 +9,7 @@ public class Student
     public int ExamId { get; set; }
     public int? ImportBatchId { get; set; }
 
-    public int SNomer { get; set; }                      // Excel S_NOMER
+    public int? SNomer { get; set; }                      // Excel S_NOMER
     public string IsN { get; set; } = null!;             // Excel is_n (unique abituriyent kodu)
     public string Surname { get; set; } = null!;         // soy
     public string Name { get; set; } = null!;            // adi
@@ -108,7 +108,7 @@ public class StudentTotalScoreView
     public int ExamId { get; set; }
     public string CommissionNo { get; set; } = null!;
     public int QrupNum { get; set; }
-    public int SNomer { get; set; }
+    public int? SNomer { get; set; }
     public string IsN { get; set; } = null!;
     public string Surname { get; set; } = null!;
     public string Name { get; set; } = null!;
@@ -120,4 +120,39 @@ public class StudentTotalScoreView
     public int? TotalScore { get; set; }
     public bool IsPassed { get; set; }
     public DateTime? LastRecordedAt { get; set; }
+}
+public record FinalScoreResult(byte? Score, string? Reason, bool Passed);
+
+public class CommissionStageRule
+{
+    public string CommissionNo { get; set; } = default!;
+    public byte Stage1Total { get; set; }
+    public byte Stage1Required { get; set; }
+    public byte? Stage2Total { get; set; }
+    public string FinalMethod { get; set; } = default!;
+    public byte MinimumScore { get; set; } = 6;
+    public string? Notes { get; set; }
+}
+
+public class StudentAppealResult
+{
+    public int Id { get; set; }
+    public int StudentId { get; set; }
+    public int ExamId { get; set; }
+    public int ExerciseId { get; set; }
+
+    public decimal? RawValue { get; set; }
+    public byte AppealScore { get; set; }
+    public byte? PreviousScore { get; set; }
+
+    /// <summary>accepted | partially | rejected</summary>
+    public string Decision { get; set; } = "accepted";
+
+    public string? Notes { get; set; }
+    public string? RecordedBy { get; set; }
+    public DateTime RecordedAt { get; set; }
+    public DateTime? UpdatedAt { get; set; }
+
+    public Student Student { get; set; } = null!;
+    public Exercise Exercise { get; set; } = null!;
 }

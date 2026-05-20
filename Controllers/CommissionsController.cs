@@ -1,4 +1,11 @@
+// ============================================================================
+// CommissionsController.cs — Results endpoint yenilənməsi
+// `totalScore >= 24` sabit məntiqi əvəzinə commission_stage_rules-a görə
+// ScoringService.CalculateFinalScoreAsync çağırılır.
+// ============================================================================
+
 using ResultAppForAdmin.Api.Application.DTOs;
+using ResultAppForAdmin.Api.Application.Services;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using ResultAppForAdmin.Api.Infrastructure.Persistence;
@@ -10,19 +17,24 @@ namespace ResultAppForAdmin.Api.Controllers;
 public class CommissionsController : ControllerBase
 {
     private readonly AppDbContext _db;
-    public CommissionsController(AppDbContext db) => _db = db;
+    private readonly ScoringService _scoring;
+    public CommissionsController(AppDbContext db, ScoringService scoring)
+    {
+        _db = db;
+        _scoring = scoring;
+    }
 
     [HttpGet]
-    public async Task<IEnumerable<object>> List(CancellationToken ct) =>
-        await _db.Commissions.AsNoTracking()
-            .OrderBy(c => c.CommissionNo)
+    public async Task<IEnumerable<object>> List(
+        [FromQuery] int? sectionId, CancellationToken ct = default)
+    {
+        var q = _db.Commissions.AsNoTracking().AsQueryable();
+        if (sectionId.HasValue) q = q.Where(c => c.SectionId == sectionId.Value);
+        return await q.OrderBy(c => c.CommissionNo)
             .Select(c => new { c.Id, c.CommissionNo, c.Name, c.SectionId })
             .ToListAsync(ct);
+    }
 
-    /// <summary>
-    /// Komissiya bazlı sonuç tablosu — bir sınavdaki tüm öğrenciler,
-    /// her exercise için ayrı kolon, total + passed flag
-    /// </summary>
     [HttpGet("{commissionNo}/results")]
     public async Task<object> Results(
         string commissionNo,
@@ -30,17 +42,16 @@ public class CommissionsController : ControllerBase
         [FromQuery] int? qrupNum,
         CancellationToken ct = default)
     {
-        // Get exercises that this commission uses (any rule rows, plus subjective ones)
-        // Heuristic: 62-ci → 4 ölçülen hareket; 63/6401/152 → sürət, sürət-güc, gimnastika, idman oyunları
-        var exerciseCodes = commissionNo switch
-        {
-            "62" => new[] { "sprint_100m", "cross_1000m", "pull_up", "long_jump" },
-            "63" or "6401" or "152" => new[] { "sprint_100m", "long_jump", "gymnastics", "sport_games" },
-            _ => Array.Empty<string>()
-        };
+        // ScoringRules-da bu komissiya üçün hansı exercise-lər istifadə olunur,
+        // hamısını dinamik tap (artıq hardcoded `commissionNo switch` istifadə etmirik)
+        var ruleExerciseIds = await _db.ScoringRules.AsNoTracking()
+            .Where(r => r.CommissionNo == commissionNo && r.IsActive)
+            .Select(r => r.ExerciseId)
+            .Distinct()
+            .ToListAsync(ct);
 
         var exercises = await _db.Exercises.AsNoTracking()
-            .Where(e => exerciseCodes.Contains(e.Code))
+            .Where(e => ruleExerciseIds.Contains(e.Id))
             .OrderBy(e => e.DisplayOrder)
             .ToListAsync(ct);
 
@@ -57,7 +68,9 @@ public class CommissionsController : ControllerBase
             .Where(r => studentIds.Contains(r.StudentId))
             .ToListAsync(ct);
 
-        var rows = students.Select(s =>
+        // Yekun bal — hər tələbə üçün ScoringService çağırılır
+        var rows = new List<CommissionResultRowDto>();
+        foreach (var s in students)
         {
             var byCode = new Dictionary<string, ResultDto?>();
             foreach (var ex in exercises)
@@ -69,22 +82,30 @@ public class CommissionsController : ControllerBase
                     r.IsRefused, r.Notes, r.RecordedAt);
             }
 
-            int? total = byCode.Values.All(v => v is not null)
-                ? byCode.Values.Sum(v => (int)v!.FinalScore)
-                : null;
+            // YEKUN bal — yeni!
+            var final = await _scoring.CalculateFinalScoreAsync(s.Id, examId, ct);
 
-            return new CommissionResultRowDto(
+            rows.Add(new CommissionResultRowDto(
                 s.Id, s.QrupNum, s.SNomer, s.IsN,
                 $"{s.Surname} {s.Name} {s.FatherName}".Trim(),
                 s.Gender, s.Kodixtisas, s.AltNov,
-                byCode, total, total is >= 24);
-        }).ToList();
+                byCode,
+                final.Score.HasValue ? (int)final.Score.Value : null,
+                final.Passed));
+        }
 
         return new
         {
             commissionNo,
             examId,
-            exercises = exercises.Select(e => new { e.Id, e.Code, e.Name, e.Unit, e.Direction, e.DisplayOrder }),
+            exercises = exercises.Select(e => new {
+                e.Id,
+                e.Code,
+                e.Name,
+                e.Unit,
+                e.Direction,
+                e.DisplayOrder
+            }),
             rows,
             summary = new
             {

@@ -12,7 +12,7 @@ public class ExamsController : ControllerBase
     private readonly AppDbContext _db;
     public ExamsController(AppDbContext db) => _db = db;
 
-    /// <summary>List exams with optional filters</summary>
+    /// <summary>List exams with optional filters (commissionNo, from, to, sectionId)</summary>
     [HttpGet]
     public async Task<IEnumerable<ExamListDto>> List(
         [FromQuery] string? commissionNo,
@@ -54,7 +54,21 @@ public class ExamsController : ControllerBase
         if (e is null) return NotFound();
 
         var expertCount  = await _db.ExamExperts.CountAsync(x => x.ExamId == id, ct);
-        var monitorCount = await _db.ExamMonitors.CountAsync(x => x.ExamId == id, ct);
+
+        // ── Monitors: role-bazlı count'lar ───────────────────────────────
+        // Role: 1=İmtahan rəhbəri, 2=Nəzarətçi, 4=Könüllü, 5=Digər işçilər
+        var monitorCountsByRole = await _db.ExamMonitors.AsNoTracking()
+            .Where(x => x.ExamId == id)
+            .GroupBy(x => x.Monitor.Role)
+            .Select(g => new { Role = g.Key, Count = g.Count() })
+            .ToListAsync(ct);
+
+        int monitorTotal = monitorCountsByRole.Sum(x => x.Count);
+        int leaderCount   = monitorCountsByRole.FirstOrDefault(x => x.Role == 1)?.Count ?? 0;
+        int monitorCount  = monitorCountsByRole.FirstOrDefault(x => x.Role == 2)?.Count ?? 0;
+        int volunteerCount = monitorCountsByRole.FirstOrDefault(x => x.Role == 4)?.Count ?? 0;
+        int otherStaffCount = monitorCountsByRole.FirstOrDefault(x => x.Role == 5)?.Count ?? 0;
+
         var repCount     = await _db.ExamRepresentatives.CountAsync(x => x.ExamId == id, ct);
         var studCount    = await _db.Students.CountAsync(x => x.ExamId == id, ct);
 
@@ -63,7 +77,14 @@ public class ExamsController : ControllerBase
             e.ExamBuilding?.Name, e.Section?.Name,
             e.StartTime, e.EndTime, e.Shift, e.StudentCount,
             e.ExamCommissions.Select(ec => ec.Commission.CommissionNo).ToArray(),
-            expertCount, monitorCount, repCount, studCount);
+            expertCount,
+            monitorTotal,
+            leaderCount,
+            monitorCount,
+            volunteerCount,
+            otherStaffCount,
+            repCount, studCount,
+            e.SectionId);
     }
 
     [HttpGet("{id:int}/experts")]
@@ -76,15 +97,40 @@ public class ExamsController : ControllerBase
             })
             .ToListAsync(ct);
 
+    /// <summary>
+    /// Exam-a bağlı monitor-lar.
+    /// Optional `role` parametri ilə filtrlənir:
+    ///   1 = İmtahan rəhbəri
+    ///   2 = Nəzarətçi
+    ///   4 = Könüllü
+    ///   5 = Digər işçilər
+    /// </summary>
     [HttpGet("{id:int}/monitors")]
-    public async Task<IEnumerable<object>> Monitors(int id, CancellationToken ct) =>
-        await _db.ExamMonitors.AsNoTracking()
-            .Where(x => x.ExamId == id)
+    public async Task<IEnumerable<object>> Monitors(
+        int id,
+        [FromQuery] byte? role,
+        CancellationToken ct = default)
+    {
+        var q = _db.ExamMonitors.AsNoTracking()
+            .Where(x => x.ExamId == id);
+
+        if (role.HasValue)
+            q = q.Where(x => x.Monitor.Role == role.Value);
+
+        return await q
+            .OrderBy(x => x.Monitor.Surname).ThenBy(x => x.Monitor.Name)
             .Select(x => new {
-                x.Monitor.Id, x.Monitor.Name, x.Monitor.Surname, x.Monitor.Fname,
-                x.Monitor.FinCode, x.RoomId, x.IsAttended
+                x.Monitor.Id,
+                x.Monitor.Name,
+                x.Monitor.Surname,
+                x.Monitor.Fname,
+                x.Monitor.FinCode,
+                Role = x.Monitor.Role,
+                x.RoomId,
+                x.IsAttended
             })
             .ToListAsync(ct);
+    }
 
     [HttpGet("{id:int}/representatives")]
     public async Task<IEnumerable<object>> Representatives(int id, CancellationToken ct) =>

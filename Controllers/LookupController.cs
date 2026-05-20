@@ -1,4 +1,4 @@
-using Microsoft.AspNetCore.Mvc;
+﻿using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using ResultAppForAdmin.Api.Infrastructure.Persistence;
 
@@ -13,20 +13,41 @@ public class LookupController : ControllerBase
 
     [HttpGet("sections")]
     public async Task<IEnumerable<object>> Sections(CancellationToken ct) =>
-        await _db.Sections.AsNoTracking().OrderBy(s => s.Name)
-            .Select(s => new { s.Id, s.Name, s.SectCode }).ToListAsync(ct);
+        await _db.Sections.AsNoTracking()
+            .OrderBy(s => s.Name)
+            .Select(s => new { s.Id, s.Name, s.SectCode })
+            .ToListAsync(ct);
 
     [HttpGet("genders")]
     public async Task<IEnumerable<object>> Genders(CancellationToken ct) =>
-        await _db.Genders.AsNoTracking().Select(g => new { g.Id, g.Name }).ToListAsync(ct);
+        await _db.Genders.AsNoTracking()
+            .Select(g => new { g.Id, g.Name })
+            .ToListAsync(ct);
 
     [HttpGet("exercises")]
     public async Task<IEnumerable<object>> Exercises(CancellationToken ct) =>
-        await _db.Exercises.AsNoTracking().OrderBy(e => e.DisplayOrder)
-            .Select(e => new { e.Id, e.Code, e.Name, e.Unit, e.Direction }).ToListAsync(ct);
+        await _db.Exercises.AsNoTracking()
+            .OrderBy(e => e.DisplayOrder)
+            .Select(e => new { e.Id, e.Code, e.Name, e.Unit, e.Direction })
+            .ToListAsync(ct);
 
+    /// <summary>
+    /// Komissiya siyahısı.
+    /// ?sectionId=N verilsə yalnız o bölmənin komissiyaları qaytarılır.
+    /// </summary>
     [HttpGet("commissions")]
-    public async Task<IEnumerable<object>> Commissions(CancellationToken ct) =>
-        await _db.Commissions.AsNoTracking().OrderBy(c => c.CommissionNo)
-            .Select(c => new { c.Id, c.CommissionNo, c.Name, c.SectionId }).ToListAsync(ct);
+    public async Task<IEnumerable<object>> Commissions(
+        [FromQuery] int? sectionId,
+        CancellationToken ct = default)
+    {
+        var q = _db.Commissions.AsNoTracking();
+
+        if (sectionId.HasValue)
+            q = q.Where(c => c.SectionId == sectionId.Value);
+
+        return await q
+            .OrderBy(c => c.CommissionNo)
+            .Select(c => new { c.Id, c.CommissionNo, c.Name, c.SectionId })
+            .ToListAsync(ct);
+    }
 }

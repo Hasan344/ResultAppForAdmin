@@ -1,5 +1,7 @@
 using FluentValidation;
 using ResultAppForAdmin.Api.Application.Services;
+using Microsoft.AspNetCore.Diagnostics;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using ResultAppForAdmin.Api.Infrastructure.Persistence;
 
@@ -13,14 +15,15 @@ builder.Services.AddDbContext<AppDbContext>(opt =>
 // ─── Services ────────────────────
 builder.Services.AddScoped<IScoringService, ScoringService>();
 builder.Services.AddScoped<IImportService, ImportService>();
-builder.Services.AddScoped<IResultsService, ResultsService>();
+builder.Services.AddScoped<IResultsService, ResultsService>(); 
+builder.Services.AddScoped<IResultsImportService, ResultsImportService>();
 
 // ─── Controllers ─────────────────
 builder.Services.AddControllers()
     .ConfigureApiBehaviorOptions(o =>
         o.SuppressMapClientErrors = false);
 
-// ✅ NEW FluentValidation registration
+// ─── FluentValidation ────────────
 builder.Services.AddValidatorsFromAssemblyContaining<Program>();
 
 // ─── Swagger ─────────────────────
@@ -43,7 +46,28 @@ if (app.Environment.IsDevelopment())
     app.UseSwaggerUI();
 }
 
-app.UseExceptionHandler();
+// ── Global exception handler: həmişə JSON qaytarır ───────────────────────────
+// app.UseExceptionHandler() — ASP.NET-in default handler-i HTML qaytarır,
+// bu isə frontend-də "An error occurred..." kimi görünür.
+// Əvəzinə: özümüz JSON yazırıq.
+app.UseExceptionHandler(errApp => errApp.Run(async ctx =>
+{
+    var ex = ctx.Features.Get<IExceptionHandlerFeature>()?.Error;
+    var isDev = app.Environment.IsDevelopment();
+
+    ctx.Response.ContentType = "application/json";
+    ctx.Response.StatusCode = ex is InvalidOperationException ? 400 : 500;
+
+    var problem = new
+    {
+        error = ex?.Message ?? "Server xətası",
+        detail = isDev ? ex?.ToString() : ex?.InnerException?.Message,
+        type = isDev ? ex?.GetType().FullName : null
+    };
+
+    await ctx.Response.WriteAsJsonAsync(problem);
+}));
+
 app.UseStatusCodePages();
 app.UseCors();
 app.UseAuthorization();
