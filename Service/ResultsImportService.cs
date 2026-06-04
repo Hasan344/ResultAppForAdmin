@@ -15,7 +15,9 @@ public interface IResultsImportService
     /// <summary>
     /// Excel-dən nəticələri import edir. Format:
     ///   is_n | exercise_code | raw_value | is_refused | notes
-    /// Optional: exam_id (yoxdursa is_n-dən tapılır)
+    /// Opsional apellyasiya sütunları:
+    ///   appeal_score | appeal_raw_value | appeal_decision | appeal_notes
+    /// appeal_score doldurulduğu sətirlərdə student_appeal_results-a upsert edilir.
     /// Tələbə is_n vasitəsilə tapılır, ScoringService rawValue → bal hesablayır.
     /// </summary>
     Task<ResultsImportResult> ImportResultsAutoAsync(
@@ -34,7 +36,9 @@ public record ResultsImportResult(
     int Inserted,
     int Updated,
     int Failed,
-    int Duplicates,                              // overwriteExisting=false zamanı skip edilənlər
+    int Duplicates,                              // overwriteExisting=false zamanı skip edilən orijinal nəticələr
+    int AppealsInserted,                         // yeni yaradılan apellyasiya nəticələri
+    int AppealsUpdated,                          // yenilənən apellyasiya nəticələri
     List<ResultsImportRowError> Errors,
     Dictionary<string, int> SuccessByCommission);
 
@@ -96,17 +100,26 @@ public class ResultsImportService : IResultsImportService
         var exerciseLookup = await _db.Exercises.AsNoTracking()
             .ToDictionaryAsync(e => e.Code.ToLowerInvariant(), e => e.Id, ct);
 
-        // Mövcud nəticələr (overwrite=false halında duplicate-ləri tapmaq üçün)
-        var existingPairs = (await _db.StudentExamResults.AsNoTracking()
-            .Select(r => new { r.StudentId, r.ExerciseId })
-            .ToListAsync(ct))
+        // Mövcud orijinal nəticələr — həm duplicate yoxlaması, həm də apellyasiya
+        // previous_score üçün final_score lazımdır.
+        var existingResults = await _db.StudentExamResults.AsNoTracking()
+            .Select(r => new { r.StudentId, r.ExerciseId, r.FinalScore })
+            .ToListAsync(ct);
+
+        var existingPairs = existingResults
             .Select(x => (x.StudentId, x.ExerciseId))
             .ToHashSet();
+
+        // (studentId, exerciseId) → orijinal final_score (apellyasiya previous_score üçün)
+        var originalScoreLookup = existingResults
+            .GroupBy(x => (x.StudentId, x.ExerciseId))
+            .ToDictionary(g => g.Key, g => (byte?)g.First().FinalScore);
 
         // ─── İterasiya ───────────────────────────────────────────────────────
         var errors = new List<ResultsImportRowError>();
         var successByCommission = new Dictionary<string, int>();
         int total = 0, inserted = 0, updated = 0, failed = 0, duplicates = 0;
+        int appealsInserted = 0, appealsUpdated = 0;
 
         foreach (var row in range.RowsUsed().Skip(1))
         {
@@ -114,13 +127,19 @@ public class ResultsImportService : IResultsImportService
             int rowNum = row.RowNumber();
             try
             {
-                // ── Sahələri oxu ─────────────────────────────────────────────
+                // ── Əsas sahələri oxu ────────────────────────────────────────
                 string isN = CellString(row, col, "is_n", required: true);
                 string code = CellString(row, col, "exercise_code", required: true).ToLowerInvariant();
 
                 decimal? rawValue = CellOptDecimal(row, col, "raw_value");
                 bool isRefused = CellOptBool(row, col, "is_refused") ?? false;
                 string? notes = CellOptString(row, col, "notes");
+
+                // ── Apellyasiya sahələri (opsional) ──────────────────────────
+                byte? appealScore     = CellOptScore(row, col, "appeal_score");
+                decimal? appealRaw    = CellOptDecimal(row, col, "appeal_raw_value");
+                string? appealDecision = CellOptString(row, col, "appeal_decision");
+                string? appealNotes   = CellOptString(row, col, "appeal_notes");
 
                 // ── Tələbəni tap ─────────────────────────────────────────────
                 if (!studentLookup.TryGetValue(isN, out var student))
@@ -130,40 +149,94 @@ public class ResultsImportService : IResultsImportService
                 if (!exerciseLookup.TryGetValue(code, out var exerciseId))
                     throw new Exception($"exercise_code='{code}' tapılmadı");
 
-                // ── raw_value yoxlaması ──────────────────────────────────────
-                if (!isRefused && rawValue is null)
-                    throw new Exception("raw_value boşdur və is_refused=false (ya raw_value verin ya da imtina kimi qeyd edin)");
+                bool hasOriginal = isRefused || rawValue is not null;
+                bool hasAppeal   = appealScore is not null;
 
-                // ── Duplicate yoxlaması (overwrite=false-da) ─────────────────
-                bool alreadyExists = existingPairs.Contains((student.Id, exerciseId));
-                if (alreadyExists && !overwriteExisting)
+                if (!hasOriginal && !hasAppeal)
+                    throw new Exception(
+                        "Bu sətirdə nə nəticə (raw_value / is_refused) nə də apellyasiya (appeal_score) datası var");
+
+                // Eyni sətirdə yeni import edilən orijinal balı (apellyasiya previous_score üçün)
+                byte? freshFinalScore = null;
+
+                // ════ ORİJİNAL NƏTİCƏ ════════════════════════════════════════
+                if (hasOriginal)
                 {
-                    duplicates++;
-                    errors.Add(new(rowNum,
-                        $"Skip: is_n={isN}, exercise={code} — artıq mövcuddur"));
-                    continue;
+                    bool alreadyExists = existingPairs.Contains((student.Id, exerciseId));
+                    if (alreadyExists && !overwriteExisting)
+                    {
+                        // Orijinal əzilmir, amma apellyasiya yenə də emal olunur (aşağıda).
+                        duplicates++;
+                        errors.Add(new(rowNum,
+                            $"Skip: is_n={isN}, exercise={code} — nəticə artıq mövcuddur"));
+                    }
+                    else
+                    {
+                        var saved = await _results.UpsertAsync(new UpsertResultDto(
+                            StudentId: student.Id,
+                            ExerciseId: exerciseId,
+                            RawValue: rawValue,
+                            IsRefused: isRefused,
+                            FinalScoreOverride: null,           // həmişə avtomatik
+                            Notes: notes,
+                            RecordedBy: importedBy
+                        ), ct);
+
+                        freshFinalScore = (byte?)saved.FinalScore;
+
+                        if (alreadyExists) updated++;
+                        else
+                        {
+                            inserted++;
+                            existingPairs.Add((student.Id, exerciseId));
+                        }
+
+                        successByCommission[student.CommissionNo] =
+                            successByCommission.GetValueOrDefault(student.CommissionNo) + 1;
+                    }
                 }
 
-                // ── Upsert (ResultsService scoring işini görür) ──────────────
-                await _results.UpsertAsync(new UpsertResultDto(
-                    StudentId: student.Id,
-                    ExerciseId: exerciseId,
-                    RawValue: rawValue,
-                    IsRefused: isRefused,
-                    FinalScoreOverride: null,           // həmişə avtomatik
-                    Notes: notes,
-                    RecordedBy: importedBy
-                ), ct);
-
-                if (alreadyExists) updated++;
-                else
+                // ════ APELLYASİYA NƏTİCƏSİ ═══════════════════════════════════
+                if (hasAppeal)
                 {
-                    inserted++;
-                    existingPairs.Add((student.Id, exerciseId));
-                }
+                    // previous_score: əvvəlcə bu importda hesablanan bal, yoxdursa mövcud orijinal bal
+                    byte? prev = freshFinalScore
+                        ?? (originalScoreLookup.TryGetValue((student.Id, exerciseId), out var fs) ? fs : null);
 
-                successByCommission[student.CommissionNo] =
-                    successByCommission.GetValueOrDefault(student.CommissionNo) + 1;
+                    var appeal = await _db.StudentAppealResults
+                        .FirstOrDefaultAsync(r => r.StudentId == student.Id && r.ExerciseId == exerciseId, ct);
+
+                    if (appeal is null)
+                    {
+                        _db.StudentAppealResults.Add(new StudentAppealResult
+                        {
+                            StudentId     = student.Id,
+                            ExamId        = student.ExamId,
+                            ExerciseId    = exerciseId,
+                            RawValue      = appealRaw,
+                            AppealScore   = appealScore!.Value,
+                            PreviousScore = prev,
+                            Decision      = ResolveDecision(appealDecision, appealScore!.Value, prev),
+                            Notes         = appealNotes,
+                            RecordedBy    = importedBy,
+                            RecordedAt    = DateTime.UtcNow
+                        });
+                        appealsInserted++;
+                    }
+                    else
+                    {
+                        appeal.RawValue    = appealRaw;
+                        appeal.AppealScore = appealScore!.Value;
+                        appeal.Decision    = ResolveDecision(appealDecision, appealScore!.Value, prev);
+                        appeal.Notes       = appealNotes;
+                        if (prev is not null) appeal.PreviousScore = prev;
+                        appeal.RecordedBy  = importedBy;
+                        appeal.UpdatedAt   = DateTime.UtcNow;
+                        appealsUpdated++;
+                    }
+
+                    await _db.SaveChangesAsync(ct);
+                }
             }
             catch (Exception ex)
             {
@@ -175,6 +248,7 @@ public class ResultsImportService : IResultsImportService
 
         return new ResultsImportResult(
             total, inserted, updated, failed, duplicates,
+            appealsInserted, appealsUpdated,
             errors, successByCommission);
     }
 
@@ -247,5 +321,43 @@ public class ResultsImportService : IResultsImportService
             "0" or "false" or "no" or "xeyr" or "yox" or "" => false,
             _ => null
         };
+    }
+
+    /// <summary>
+    /// Apellyasiya balını oxu (0-10 aralığı). Boşdursa null qaytarır.
+    /// </summary>
+    private static byte? CellOptScore(IXLRangeRow row, Dictionary<string, int> col, string field)
+    {
+        var d = CellOptDecimal(row, col, field);
+        if (d is null) return null;
+
+        var v = (int)Math.Round(d.Value, MidpointRounding.AwayFromZero);
+        if (v < 0 || v > 10)
+            throw new Exception($"'{field}' 0-10 aralığında olmalıdır: '{d}'");
+        return (byte)v;
+    }
+
+    /// <summary>
+    /// Qərarı normalize et → dəyişdi | dəyişmədi.
+    /// Açıq dəyər verilibsə onu götürür; boşdursa apellyasiya balı ilə əvvəlki
+    /// balı müqayisə edib avtomatik təyin edir (fərqlidirsə "dəyişdi").
+    /// </summary>
+    private static string ResolveDecision(string? raw, byte appealScore, byte? previousScore)
+    {
+        if (!string.IsNullOrWhiteSpace(raw))
+        {
+            var v = raw.Trim().ToLowerInvariant();
+            if (v is "dəyişdi" or "deyisdi" or "changed" or "accepted"
+                  or "1" or "true" or "bəli" or "beli" or "var")
+                return "dəyişdi";
+            if (v is "dəyişmədi" or "deyismedi" or "unchanged" or "rejected"
+                  or "0" or "false" or "xeyr" or "yox")
+                return "dəyişmədi";
+            // tanınmayan dəyər → aşağıdakı avtomatik məntiqə düş
+        }
+
+        // Avtomatik: əvvəlki bal yoxdursa və ya apellyasiya balı fərqlidirsə "dəyişdi"
+        if (previousScore is null) return "dəyişdi";
+        return appealScore != previousScore.Value ? "dəyişdi" : "dəyişmədi";
     }
 }

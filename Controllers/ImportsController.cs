@@ -147,8 +147,12 @@ public class ImportsController : ControllerBase
         ws.Cell(1, 3).Value = "raw_value";
         ws.Cell(1, 4).Value = "is_refused";
         ws.Cell(1, 5).Value = "notes";
-        ws.Range(1, 1, 1, 5).Style.Font.Bold = true;
-        ws.Range(1, 1, 1, 5).Style.Fill.BackgroundColor = XLColor.LightBlue;
+        ws.Cell(1, 6).Value = "appeal_score";       // 0-10, doldurulsa apellyasiya yaranır
+        ws.Cell(1, 7).Value = "appeal_raw_value";   // opsional ölçü
+        ws.Cell(1, 8).Value = "appeal_decision";    // accepted | partially | rejected
+        ws.Cell(1, 9).Value = "appeal_notes";
+        ws.Range(1, 1, 1, 9).Style.Font.Bold = true;
+        ws.Range(1, 1, 1, 9).Style.Fill.BackgroundColor = XLColor.LightBlue;
 
         // Nümunə sətrlər
         ws.Cell(2, 1).Value = "134518";
@@ -165,7 +169,20 @@ public class ImportsController : ControllerBase
         ws.Cell(4, 4).Value = true;
         ws.Cell(4, 5).Value = "imtina etdi";
 
-        // Avtomatik sütun eni
+        // Apellyasiya nümunəsi: orijinal + apellyasiya birlikdə
+        ws.Cell(5, 1).Value = "134518";
+        ws.Cell(5, 2).Value = "pull_up";
+        ws.Cell(5, 3).Value = 8;
+        ws.Cell(5, 6).Value = 9;            // apellyasiya balı
+        ws.Cell(5, 8).Value = "accepted";
+        ws.Cell(5, 9).Value = "apellyasiya qəbul olundu";
+
+        // Yalnız apellyasiya (orijinal nəticə artıq mövcuddur)
+        ws.Cell(6, 1).Value = "134519";
+        ws.Cell(6, 2).Value = "sprint_100m";
+        ws.Cell(6, 6).Value = 7;
+        ws.Cell(6, 8).Value = "partially";
+
         ws.Columns().AdjustToContents();
 
         // Köməkçi sheet — exercise kodları

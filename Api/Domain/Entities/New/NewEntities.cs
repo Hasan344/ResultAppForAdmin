@@ -60,6 +60,7 @@ public class Exercise
     public string Unit { get; set; } = null!;            // 'second','cm','count','score'
     public byte Direction { get; set; }                  // 1=lower-better, 2=higher-better
     public int DisplayOrder { get; set; }
+    public int? SectionId { get; set; }
 }
 
 // ─── scoring_rules ───────────────────────────────────────────────────────
@@ -146,7 +147,7 @@ public class StudentAppealResult
     public byte? PreviousScore { get; set; }
 
     /// <summary>accepted | partially | rejected</summary>
-    public string Decision { get; set; } = "accepted";
+    public string Decision { get; set; } = "dəyişmədi";
 
     public string? Notes { get; set; }
     public string? RecordedBy { get; set; }

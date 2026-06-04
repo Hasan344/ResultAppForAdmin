@@ -249,6 +249,7 @@ public class AppDbContext : DbContext
             e.Property(x => x.Unit).HasColumnName("unit");
             e.Property(x => x.Direction).HasColumnName("direction");
             e.Property(x => x.DisplayOrder).HasColumnName("display_order");
+            e.Property(x => x.SectionId).HasColumnName("section_id");
         });
 
         b.Entity<ScoringRule>(e =>

@@ -131,6 +131,8 @@ export type ResultsImportResult = {
     updated: number;
     failed: number;
     duplicates: number;
+    appealsInserted: number;  
+    appealsUpdated: number;
     errors: { row: number; error: string }[];
     successByCommission: Record<string, number>;
 };
@@ -149,6 +151,7 @@ export type Exercise = {
   name: string;
   unit: string;
   direction: number;
+  sectionId: number | null;
 };
 
 export type AppealOriginalResult = {

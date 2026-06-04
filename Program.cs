@@ -16,7 +16,8 @@ builder.Services.AddDbContext<AppDbContext>(opt =>
 builder.Services.AddScoped<IScoringService, ScoringService>();
 builder.Services.AddScoped<IImportService, ImportService>();
 builder.Services.AddScoped<IResultsService, ResultsService>(); 
-builder.Services.AddScoped<IResultsImportService, ResultsImportService>();
+builder.Services.AddScoped<IResultsImportService, ResultsImportService>(); 
+builder.Services.AddScoped<IResultFileExportService, ResultFileExportService>();
 
 // ─── Controllers ─────────────────
 builder.Services.AddControllers()

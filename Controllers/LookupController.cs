@@ -25,12 +25,22 @@ public class LookupController : ControllerBase
             .ToListAsync(ct);
 
     [HttpGet("exercises")]
-    public async Task<IEnumerable<object>> Exercises(CancellationToken ct) =>
-        await _db.Exercises.AsNoTracking()
-            .OrderBy(e => e.DisplayOrder)
-            .Select(e => new { e.Id, e.Code, e.Name, e.Unit, e.Direction })
-            .ToListAsync(ct);
+    public async Task<IEnumerable<object>> Exercises(
+    [FromQuery] int? sectionId,          // ← YENİ
+    CancellationToken ct = default)
+    {
+        var q = _db.Exercises.AsNoTracking().AsQueryable();
 
+        // NULL olan egzersizlər hər bölmədə görünür;
+        // SectionId olan egzersizlər yalnız o bölmədə
+        if (sectionId.HasValue)
+            q = q.Where(e => e.SectionId == null || e.SectionId == sectionId.Value);
+
+        return await q
+            .OrderBy(e => e.DisplayOrder)
+            .Select(e => new { e.Id, e.Code, e.Name, e.Unit, e.Direction, e.SectionId })
+            .ToListAsync(ct);
+    }
     /// <summary>
     /// Komissiya siyahısı.
     /// ?sectionId=N verilsə yalnız o bölmənin komissiyaları qaytarılır.

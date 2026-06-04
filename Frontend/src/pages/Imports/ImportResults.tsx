@@ -1,7 +1,7 @@
 import { useState } from "react";
 import {
   Upload, FileSpreadsheet, CheckCircle2, AlertCircle,
-  Loader2, X, Info, Download, Trophy, RefreshCw, Hash
+  Loader2, X, Info, Download, Trophy, RefreshCw, Hash, Scale
 } from "lucide-react";
 import type { AxiosError } from "axios";
 import { api } from "../../api/client";
@@ -243,14 +243,15 @@ export default function ImportResults() {
             </div>
           </div>
 
-          {/* 5 stat kartı */}
-          <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
-            <StatCard label="Cəmi" value={result.total} tone="neutral" icon={<Hash className="w-5 h-5" />} />
-            <StatCard label="Yeni" value={result.inserted} tone="success" icon={<CheckCircle2 className="w-5 h-5" />} />
-            <StatCard label="Yenilənmiş" value={result.updated} tone="brand" icon={<RefreshCw className="w-5 h-5" />} />
-            <StatCard label="Dublikat" value={result.duplicates} tone="amber" icon={<Info className="w-5 h-5" />} />
-            <StatCard label="Uğursuz" value={result.failed} tone="danger" icon={<AlertCircle className="w-5 h-5" />} />
-          </div>
+                  <div className="grid grid-cols-2 lg:grid-cols-7 gap-3">
+                      <StatCard label="Cəmi" value={result.total} tone="neutral" icon={<Hash className="w-5 h-5" />} />
+                      <StatCard label="Yeni" value={result.inserted} tone="success" icon={<CheckCircle2 className="w-5 h-5" />} />
+                      <StatCard label="Yenilənmiş" value={result.updated} tone="brand" icon={<RefreshCw className="w-5 h-5" />} />
+                      <StatCard label="Dublikat" value={result.duplicates} tone="amber" icon={<Info className="w-5 h-5" />} />
+                      <StatCard label="Uğursuz" value={result.failed} tone="danger" icon={<AlertCircle className="w-5 h-5" />} />
+                      <StatCard label="Apel. yeni" value={result.appealsInserted} tone="brand" icon={<Scale className="w-5 h-5" />} />
+                      <StatCard label="Apel. yenil." value={result.appealsUpdated} tone="amber" icon={<Scale className="w-5 h-5" />} />
+                  </div>
 
           {result.duplicates > 0 && !overwrite && (
             <div className="rounded-2xl bg-amber-50 border border-amber-200 p-4 flex items-start gap-3">

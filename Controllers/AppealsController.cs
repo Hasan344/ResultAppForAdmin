@@ -149,7 +149,7 @@ public class AppealsController : ControllerBase
                 RawValue      = req.RawValue,
                 AppealScore   = req.AppealScore,
                 PreviousScore = (byte?)original?.FinalScore,
-                Decision      = req.Decision ?? "accepted",
+                Decision      = req.Decision ?? ((byte?)original?.FinalScore != req.AppealScore ? "dəyişdi" : "dəyişmədi"),
                 Notes         = req.Notes,
                 RecordedBy    = User?.Identity?.Name,
                 RecordedAt    = DateTime.UtcNow
@@ -178,7 +178,7 @@ public class AppealsController : ControllerBase
             exerciseId,
             appealScore   = req.AppealScore,
             previousScore = original?.FinalScore,
-            decision      = req.Decision ?? "accepted"
+            Decision = req.Decision ?? ((byte?)original?.FinalScore != req.AppealScore ? "dəyişdi" : "dəyişmədi"),
         });
     }
 
@@ -202,5 +202,5 @@ public class AppealsController : ControllerBase
 public record AppealUpsertRequest(
     byte AppealScore,               // 0-10
     decimal? RawValue,              // opsional ölçü
-    string? Decision,               // accepted | partially | rejected
+    string? Decision,               // dəyişdi | dəyişmədi
     string? Notes);

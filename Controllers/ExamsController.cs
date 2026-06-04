@@ -2,6 +2,7 @@ using ResultAppForAdmin.Api.Application.DTOs;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using ResultAppForAdmin.Api.Infrastructure.Persistence;
+using ResultAppForAdmin.Api.Application.Services;
 
 namespace ResultAppForAdmin.Api.Controllers;
 
@@ -10,7 +11,12 @@ namespace ResultAppForAdmin.Api.Controllers;
 public class ExamsController : ControllerBase
 {
     private readonly AppDbContext _db;
-    public ExamsController(AppDbContext db) => _db = db;
+    private readonly IResultFileExportService _export;
+    public ExamsController(AppDbContext db, IResultFileExportService export)
+    {
+        _db = db;
+        _export = export;
+    }
 
     /// <summary>List exams with optional filters (commissionNo, from, to, sectionId)</summary>
     [HttpGet]
@@ -142,4 +148,20 @@ public class ExamsController : ControllerBase
                 x.Representative.FinCode
             })
             .ToListAsync(ct);
+
+    [HttpGet("{examId:int}/result-file")]
+    public async Task<IActionResult> ExportResultFile(
+    int examId,
+    [FromQuery] int? qrupNum,
+    [FromQuery] string? commissionNo,
+    CancellationToken ct)
+    {
+        var exists = await _db.Exams.AnyAsync(e => e.Id == examId, ct);
+        if (!exists) return NotFound($"examId={examId} tapılmadı");
+
+        var bytes = await _export.ExportAsync(examId, qrupNum, commissionNo, ct);
+        return File(bytes,
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            $"netice_exam{examId}.xlsx");
+    }
 }
