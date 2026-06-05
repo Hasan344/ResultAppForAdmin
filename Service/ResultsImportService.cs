@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text.Json;
 using ClosedXML.Excel;
 using Microsoft.EntityFrameworkCore;
+using ResultAppForAdmin.Api.Domain.Entities.Existing;
 using ResultAppForAdmin.Api.Domain.Entities.New;
 using ResultAppForAdmin.Api.Infrastructure.Persistence;
 
@@ -83,18 +84,20 @@ public class ResultsImportService : IResultsImportService
             .Select(s => new { s.Id, s.IsN, s.ExamId, s.CommissionNo })
             .ToListAsync(ct);
 
-        // Duplicate is_n yoxlaması (audit üçün)
-        var dupIsN = studentsByIsN
-            .GroupBy(s => s.IsN)
+
+        // Bileşik anahtar: (is_n, commission_no)
+        var studentLookup = studentsByIsN
+            .GroupBy(s => (IsN: s.IsN, Comm: s.CommissionNo.Trim()))
+            .ToDictionary(g => g.Key, g => g.First());
+
+        // Artık duplicate uyarısı da bileşik anahtara göre olmalı
+        var dupKeys = studentsByIsN
+            .GroupBy(s => (s.IsN, s.CommissionNo.Trim()))
             .Where(g => g.Count() > 1)
             .Select(g => g.Key)
-            .ToHashSet();
-        if (dupIsN.Count > 0)
-            _log.LogWarning("Duplicate is_n in students: {Count} entries", dupIsN.Count);
-
-        var studentLookup = studentsByIsN
-            .GroupBy(s => s.IsN)
-            .ToDictionary(g => g.Key, g => g.First());   // duplicate olarsa ilk match
+            .ToList();
+        if (dupKeys.Count > 0)
+            _log.LogWarning("Duplicate (is_n, commission_no): {Count}", dupKeys.Count);
 
         // exercise_code → id
         var exerciseLookup = await _db.Exercises.AsNoTracking()
@@ -130,6 +133,8 @@ public class ResultsImportService : IResultsImportService
                 // ── Əsas sahələri oxu ────────────────────────────────────────
                 string isN = CellString(row, col, "is_n", required: true);
                 string code = CellString(row, col, "exercise_code", required: true).ToLowerInvariant();
+                string commissionNo = CellString(row, col, "commission_no", required: true).Trim();
+                // ...
 
                 decimal? rawValue = CellOptDecimal(row, col, "raw_value");
                 bool isRefused = CellOptBool(row, col, "is_refused") ?? false;
@@ -141,9 +146,8 @@ public class ResultsImportService : IResultsImportService
                 string? appealDecision = CellOptString(row, col, "appeal_decision");
                 string? appealNotes   = CellOptString(row, col, "appeal_notes");
 
-                // ── Tələbəni tap ─────────────────────────────────────────────
-                if (!studentLookup.TryGetValue(isN, out var student))
-                    throw new Exception($"is_n={isN} students cədvəlində tapılmadı");
+                if (!studentLookup.TryGetValue((isN, commissionNo), out var student))
+                    throw new Exception($"is_n={isN}, commission_no={commissionNo} students cədvəlində tapılmadı");
 
                 // ── Exercise-i tap ───────────────────────────────────────────
                 if (!exerciseLookup.TryGetValue(code, out var exerciseId))
@@ -241,8 +245,9 @@ public class ResultsImportService : IResultsImportService
             catch (Exception ex)
             {
                 failed++;
-                errors.Add(new(rowNum, ex.Message));
-                _log.LogDebug("Row {Row} error: {Err}", rowNum, ex.Message);
+                var msg = ex.GetBaseException().Message;   // asıl SQL hatası burada
+                errors.Add(new(rowNum, msg));
+                _log.LogWarning(ex, "Row {Row} error", rowNum);   // Debug yerine Warning
             }
         }
 

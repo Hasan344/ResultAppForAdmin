@@ -68,9 +68,21 @@ public class ResultFileExportService : IResultFileExportService
                 $"examId={examId} üçün (filtrlərlə) tələbə tapılmadı");
 
         // ── Keç/qal map-i (view → StudentId → IsPassed) ──────────────────────
-        var passMap = await _db.StudentTotalScores.AsNoTracking()
-            .Where(v => v.ExamId == examId)
-            .ToDictionaryAsync(v => v.StudentId, v => v.IsPassed, ct);
+        var passMap = (await _db.StudentTotalScores.AsNoTracking()
+                        .Where(v => v.ExamId == examId)
+                        .Select(v => new { v.StudentId, v.IsPassed })
+                        .ToListAsync(ct))
+                        .GroupBy(v => v.StudentId)
+                        .ToDictionary(g => g.Key, g => g.Any(x => x.IsPassed)); 
+        
+        var studentIds = students.Select(s => s.Id).ToList();
+
+        var hasResult = (await _db.StudentExamResults.AsNoTracking()
+            .Where(r => r.ExamId == examId && studentIds.Contains(r.StudentId))
+            .Select(r => r.StudentId)
+            .Distinct()
+            .ToListAsync(ct))
+            .ToHashSet();
 
         // ── Workbook ─────────────────────────────────────────────────────────
         using var wb = new XLWorkbook();
@@ -91,7 +103,7 @@ public class ResultFileExportService : IResultFileExportService
         foreach (var s in students)
         {
             // gəlməyibsə nəticə həmişə 0; gəlibsə view-dakı IsPassed
-            bool attended = s.IsAttended;
+            bool attended = hasResult.Contains(s.Id);
             bool passed = attended && passMap.GetValueOrDefault(s.Id, false);
 
             ws.Cell(r, 1).Value = s.ImtYeriName;
