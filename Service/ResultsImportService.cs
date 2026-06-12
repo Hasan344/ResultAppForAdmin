@@ -18,8 +18,12 @@ public interface IResultsImportService
     ///   is_n | exercise_code | raw_value | is_refused | notes
     /// Opsional apellyasiya sütunları:
     ///   appeal_score | appeal_raw_value | appeal_decision | appeal_notes
-    /// appeal_score doldurulduğu sətirlərdə student_appeal_results-a upsert edilir.
-    /// Tələbə is_n vasitəsilə tapılır, ScoringService rawValue → bal hesablayır.
+    /// appeal_score VƏ YA appeal_raw_value doldurulduğu sətirlərdə
+    /// student_appeal_results-a upsert edilir.
+    ///   • appeal_score verilibsə      → ekspert override (0-10).
+    ///   • yalnız appeal_raw_value isə → orijinal nəticələr kimi ScoringService
+    ///                                    xam dəyər → bal hesablayır.
+    /// Tələbə (is_n, commission_no) cütü ilə tapılır.
     /// </summary>
     Task<ResultsImportResult> ImportResultsAutoAsync(
         Stream xlsxStream,
@@ -52,15 +56,18 @@ public class ResultsImportService : IResultsImportService
 {
     private readonly AppDbContext _db;
     private readonly IResultsService _results;
+    private readonly IScoringService _scoring;
     private readonly ILogger<ResultsImportService> _log;
 
     public ResultsImportService(
         AppDbContext db,
         IResultsService results,
+        IScoringService scoring,
         ILogger<ResultsImportService> log)
     {
         _db = db;
         _results = results;
+        _scoring = scoring;
         _log = log;
     }
 
@@ -79,11 +86,21 @@ public class ResultsImportService : IResultsImportService
         var col = BuildHeaderMap(range);
 
         // ─── Lookup cache-lər ────────────────────────────────────────────────
-        // is_n → student (bütün is_n-lər unikal olmalıdır; əgər deyilsə xəbərdarlıq)
+        // is_n → student. Apellyasiya balını avtomatik hesablamaq üçün
+        // Gender / BirthDate / AltNov / ExamDate də lazımdır (ScoringService).
         var studentsByIsN = await _db.Students.AsNoTracking()
-            .Select(s => new { s.Id, s.IsN, s.ExamId, s.CommissionNo })
+            .Select(s => new
+            {
+                s.Id,
+                s.IsN,
+                s.ExamId,
+                s.CommissionNo,
+                s.Gender,
+                s.BirthDate,
+                s.AltNov,
+                ExamDate = s.Exam.ExamDate
+            })
             .ToListAsync(ct);
-
 
         // Bileşik anahtar: (is_n, commission_no)
         var studentLookup = studentsByIsN
@@ -134,17 +151,18 @@ public class ResultsImportService : IResultsImportService
                 string isN = CellString(row, col, "is_n", required: true);
                 string code = CellString(row, col, "exercise_code", required: true).ToLowerInvariant();
                 string commissionNo = CellString(row, col, "commission_no", required: true).Trim();
-                // ...
 
                 decimal? rawValue = CellOptDecimal(row, col, "raw_value");
                 bool isRefused = CellOptBool(row, col, "is_refused") ?? false;
                 string? notes = CellOptString(row, col, "notes");
 
                 // ── Apellyasiya sahələri (opsional) ──────────────────────────
-                byte? appealScore     = CellOptScore(row, col, "appeal_score");
-                decimal? appealRaw    = CellOptDecimal(row, col, "appeal_raw_value");
+                // appeal_score → ekspert override (0-10). appeal_raw_value → xam ölçü
+                // (məs. 100 m-də 12.98 san) → bal avtomatik hesablanır.
+                byte? appealScoreManual = CellOptScore(row, col, "appeal_score");
+                decimal? appealRaw = CellOptDecimal(row, col, "appeal_raw_value");
                 string? appealDecision = CellOptString(row, col, "appeal_decision");
-                string? appealNotes   = CellOptString(row, col, "appeal_notes");
+                string? appealNotes = CellOptString(row, col, "appeal_notes");
 
                 if (!studentLookup.TryGetValue((isN, commissionNo), out var student))
                     throw new Exception($"is_n={isN}, commission_no={commissionNo} students cədvəlində tapılmadı");
@@ -154,11 +172,12 @@ public class ResultsImportService : IResultsImportService
                     throw new Exception($"exercise_code='{code}' tapılmadı");
 
                 bool hasOriginal = isRefused || rawValue is not null;
-                bool hasAppeal   = appealScore is not null;
+                bool hasAppeal = appealScoreManual is not null || appealRaw is not null;
 
                 if (!hasOriginal && !hasAppeal)
                     throw new Exception(
-                        "Bu sətirdə nə nəticə (raw_value / is_refused) nə də apellyasiya (appeal_score) datası var");
+                        "Bu sətirdə nə nəticə (raw_value / is_refused) " +
+                        "nə də apellyasiya (appeal_score / appeal_raw_value) datası var");
 
                 // Eyni sətirdə yeni import edilən orijinal balı (apellyasiya previous_score üçün)
                 byte? freshFinalScore = null;
@@ -203,6 +222,31 @@ public class ResultsImportService : IResultsImportService
                 // ════ APELLYASİYA NƏTİCƏSİ ═══════════════════════════════════
                 if (hasAppeal)
                 {
+                    // Apellyasiya balını təyin et:
+                    //   • appeal_score açıq verilibsə → ekspert override (0-10)
+                    //   • yalnız appeal_raw_value verilibsə → orijinal nəticələr kimi
+                    //     ScoringService ilə xam dəyər → bal hesabla.
+                    byte appealFinal;
+                    if (appealScoreManual is not null)
+                    {
+                        appealFinal = appealScoreManual.Value;
+                    }
+                    else
+                    {
+                        int age = student.BirthDate is null ? 0
+                            : _scoring.CalculateAge(student.BirthDate.Value, student.ExamDate);
+
+                        appealFinal = await _scoring.CalculateAsync(
+                            student.CommissionNo,
+                            student.AltNov,
+                            exerciseId,
+                            student.Gender,
+                            age,
+                            appealRaw,
+                            refused: false,
+                            ct);
+                    }
+
                     // previous_score: əvvəlcə bu importda hesablanan bal, yoxdursa mövcud orijinal bal
                     byte? prev = freshFinalScore
                         ?? (originalScoreLookup.TryGetValue((student.Id, exerciseId), out var fs) ? fs : null);
@@ -214,28 +258,28 @@ public class ResultsImportService : IResultsImportService
                     {
                         _db.StudentAppealResults.Add(new StudentAppealResult
                         {
-                            StudentId     = student.Id,
-                            ExamId        = student.ExamId,
-                            ExerciseId    = exerciseId,
-                            RawValue      = appealRaw,
-                            AppealScore   = appealScore!.Value,
+                            StudentId = student.Id,
+                            ExamId = student.ExamId,
+                            ExerciseId = exerciseId,
+                            RawValue = appealRaw,
+                            AppealScore = appealFinal,
                             PreviousScore = prev,
-                            Decision      = ResolveDecision(appealDecision, appealScore!.Value, prev),
-                            Notes         = appealNotes,
-                            RecordedBy    = importedBy,
-                            RecordedAt    = DateTime.UtcNow
+                            Decision = ResolveDecision(appealDecision, appealFinal, prev),
+                            Notes = appealNotes,
+                            RecordedBy = importedBy,
+                            RecordedAt = DateTime.UtcNow
                         });
                         appealsInserted++;
                     }
                     else
                     {
-                        appeal.RawValue    = appealRaw;
-                        appeal.AppealScore = appealScore!.Value;
-                        appeal.Decision    = ResolveDecision(appealDecision, appealScore!.Value, prev);
-                        appeal.Notes       = appealNotes;
+                        appeal.RawValue = appealRaw;
+                        appeal.AppealScore = appealFinal;
+                        appeal.Decision = ResolveDecision(appealDecision, appealFinal, prev);
+                        appeal.Notes = appealNotes;
                         if (prev is not null) appeal.PreviousScore = prev;
-                        appeal.RecordedBy  = importedBy;
-                        appeal.UpdatedAt   = DateTime.UtcNow;
+                        appeal.RecordedBy = importedBy;
+                        appeal.UpdatedAt = DateTime.UtcNow;
                         appealsUpdated++;
                     }
 
@@ -330,6 +374,8 @@ public class ResultsImportService : IResultsImportService
 
     /// <summary>
     /// Apellyasiya balını oxu (0-10 aralığı). Boşdursa null qaytarır.
+    /// QEYD: bu yalnız appeal_score sütunu üçündür — bu sütun BALdır (0-10),
+    /// xam ölçü deyil. Xam dəyər (məs. 12.98 san) appeal_raw_value sütununa yazılır.
     /// </summary>
     private static byte? CellOptScore(IXLRangeRow row, Dictionary<string, int> col, string field)
     {

@@ -17,11 +17,18 @@ public interface IScoringService
         CancellationToken ct = default);
 
     int CalculateAge(DateOnly birthDate, DateOnly examDate);
+
+    // Yekun bal + keç/qal — komissiya stage rule-una (yoxdursa köhnə cəm eşiyinə) görə.
+    Task<FinalScoreResult> CalculateFinalScoreAsync(
+        int studentId, int examId, CancellationToken ct = default);
 }
 
 public class ScoringService : IScoringService
 {
     private readonly AppDbContext _db;
+
+    // Stage rule-u olmayan komissiyalar üçün köhnə (view) davranışı: cəm >= bu eşik.
+    private const int LegacyPassThreshold = 24;
 
     public ScoringService(AppDbContext db) => _db = db;
 
@@ -91,26 +98,17 @@ public class ScoringService : IScoringService
     /// Aligned with how Azerbaijani sport competitions calculate age (full years).
     /// </summary>
     public int CalculateAge(DateOnly birthDate, DateOnly examDate)
-    {
-        int age = examDate.Year - birthDate.Year;
-        if (examDate < birthDate.AddYears(age)) age--;
-        return age;
-    }
-
+    => examDate.Year - birthDate.Year;
     // ════════════════════════════════════════════════════════════════════════
     // YEKUN bal — komissiyanın FinalMethod-una görə
+    // Apellyasiya balı (varsa) orijinal balı/imtinanı override edir.
+    // Stage rule yoxdursa köhnə (view) davranışına — sadə cəm >= eşik — düşür.
     // ════════════════════════════════════════════════════════════════════════
     public async Task<FinalScoreResult> CalculateFinalScoreAsync(
         int studentId, int examId, CancellationToken ct = default)
     {
         var student = await _db.Students.AsNoTracking()
             .FirstAsync(s => s.Id == studentId, ct);
-
-        var rule = await _db.Set<CommissionStageRule>().AsNoTracking()
-            .FirstOrDefaultAsync(r => r.CommissionNo == student.CommissionNo, ct);
-
-        if (rule is null)
-            return new FinalScoreResult(null, "Bu komissiya üçün stage rule yoxdur", false);
 
         // Bu tələbə üçün bütün nəticələr
         var results = await _db.StudentExamResults.AsNoTracking()
@@ -120,6 +118,37 @@ public class ScoringService : IScoringService
 
         if (results.Count == 0)
             return new FinalScoreResult(null, "Nəticə yoxdur", false);
+
+        // ── Apellyasiya override: appeal varsa orijinal balı (və imtinanı) əvəz edir ──
+        var appeals = await _db.StudentAppealResults.AsNoTracking()
+            .Where(a => a.StudentId == studentId)
+            .ToDictionaryAsync(a => a.ExerciseId, a => a.AppealScore, ct);
+
+        if (appeals.Count > 0)
+            foreach (var r in results)
+                if (appeals.TryGetValue(r.ExerciseId, out var appealScore))
+                {
+                    r.FinalScore = appealScore;   // əsas bal artıq apellyasiya balıdır
+                    r.IsRefused = false;         // apellyasiya imtinanı da ləğv edir
+                }
+
+        var rule = await _db.Set<CommissionStageRule>().AsNoTracking()
+            .FirstOrDefaultAsync(r => r.CommissionNo == student.CommissionNo, ct);
+
+        // ── Stage rule yoxdursa: köhnə (view) davranışı — sadə cəm eşiyi ──
+        // (məs. komissiya 63 — fərdi normativlərin cəmi >= 24)
+        if (rule is null)
+        {
+            if (results.Any(r => r.IsRefused))
+                return new FinalScoreResult(0, "Normativdə imtina", false);
+
+            int total = results.Sum(r => r.FinalScore);
+            bool passed = total >= LegacyPassThreshold;
+            return new FinalScoreResult(
+                (byte)Math.Clamp(total, 0, 255),
+                passed ? null : $"Cəm {total} < {LegacyPassThreshold}",
+                passed);
+        }
 
         // I mərhələ və II/ümumi xal ayrılması:
         // Konvensiya: exercise.code "_total_xal" ilə bitirsə → ümumi xal (stage2);
@@ -200,7 +229,8 @@ public class ScoringService : IScoringService
     // ════════════════════════════════════════════════════════════════════════
     // ÜMUMİ XAL — birləşdirilmiş handler
     // Əvvəlki HandleSum (qılıncoynatma) + HandleStage2Only (II mərhələ ümumi xal)
-    // burada birləşir. Hər ikisinin məntiqi eynidir:
+    // burada birləşir.
+    // Hər ikisinin məntiqi eynidir:
     //   1) (varsa) I mərhələ minimum gate
     //   2) "_total_xal" normativinin FinalScore-u (artıq lookup ilə hesablanıb)
     //   3) >= MinimumScore → məqbul

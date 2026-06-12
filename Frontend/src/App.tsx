@@ -4,7 +4,8 @@ import {
   Upload,
   Users,
   SlidersHorizontal,
-  LayoutDashboard
+    LayoutDashboard,
+    Download
 } from "lucide-react";
 import type { ReactNode } from "react";
 
@@ -15,6 +16,7 @@ import CommissionResults from "./pages/Commissions/CommissionResults";
 import ScoringRules from "./pages/Admin/ScoringRules";
 import { SectionSelector } from "./components/SectionSelector";
 import ImportResults from "./pages/Imports/ImportResults";
+import ExportSnapshot from "./pages/Exports/ExportSnapshot";
 
 type NavLinkItem = {
   to: string;
@@ -26,6 +28,7 @@ const navLinks: NavLinkItem[] = [
     { to: "/exams", label: "İmtahanlar", icon: <GraduationCap className="w-[18px] h-[18px]" /> },
     { to: "/imports", label: "Tələbə import", icon: <Upload className="w-[18px] h-[18px]" /> },       
     { to: "/results-import", label: "Nəticə import", icon: <Upload className="w-[18px] h-[18px]" /> },
+    { to: "/export", label: "Snapshot eksport", icon: <Download className="w-[18px] h-[18px]" /> },
   { to: "/commissions", label: "Komissiyalar", icon: <Users className="w-[18px] h-[18px]" /> },
   {
     to: "/admin/scoring-rules",
@@ -144,6 +147,7 @@ export default function App() {
             <Route path="/commissions/:commissionNo" element={<CommissionResults />} />
             <Route path="/admin/scoring-rules" element={<ScoringRules />} />
             <Route path="/results-import" element={<ImportResults />} />
+            <Route path="/export" element={<ExportSnapshot />} />
           </Routes>
         </div>
       </main>

@@ -1,3 +1,6 @@
+using System.ComponentModel.DataAnnotations;
+using System.ComponentModel.DataAnnotations.Schema;
+
 namespace ResultAppForAdmin.Api.Domain.Entities.Existing;
 
 // ─── exams ───────────────────────────────────────────────────────────────
@@ -21,6 +24,7 @@ public class Exam
     public ExamBuilding? ExamBuilding { get; set; }
     public ICollection<ExamCommission> ExamCommissions { get; set; } = new List<ExamCommission>();
     public ICollection<ExamExpert> ExamExperts { get; set; } = new List<ExamExpert>();
+    public ICollection<ExamExpertSubprofessions> ExamExpertSubProfessions { get; set; } = new List<ExamExpertSubprofessions>();
     public ICollection<ExamMonitor> ExamMonitors { get; set; } = new List<ExamMonitor>();
     public ICollection<ExamRepresentative> ExamRepresentatives { get; set; } = new List<ExamRepresentative>();
 }
@@ -31,6 +35,11 @@ public class Section
     public int Id { get; set; }
     public string Name { get; set; } = null!;
     public int? SectCode { get; set; }
+}
+public class District
+{
+    public int Id { get; set; }
+    public string Name { get; set; } = null!;
 }
 
 // ─── exam_building ───────────────────────────────────────────────────────
@@ -105,6 +114,14 @@ public class Representative
 // ─── Join tables ─────────────────────────────────────────────────────────
 public class ExamExpert
 {
+    public int ExamId { get; set; }
+    public int ExpertId { get; set; }
+    public Exam Exam { get; set; } = null!;
+    public Expert Expert { get; set; } = null!;
+}
+public class ExamExpertSubprofessions
+{
+    public int Id { get; set; }
     public int ExamId { get; set; }
     public int ExpertId { get; set; }
     public Exam Exam { get; set; } = null!;

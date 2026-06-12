@@ -173,15 +173,6 @@ public class ExportController : ControllerBase
             .ToListAsync(ct);
     }
 
-    // ────────────────────────────────────────────────────────────────────
-    // SNAPSHOT — hər şey bir cavabda
-    // ----------------------------------------------------------------------
-    // İdealdır: hədəf layihə tək HTTP çağrısı ilə bütün dataları çəkir,
-    // bütün cədvəllər bir-biriylə uyğundur (referensial integrity guaranteed).
-    //
-    // Filtrlər istənilən kombinasiyada birləşdirilə bilər. Heç biri verilmirsə
-    // bütün data qaytarılır.
-    // ────────────────────────────────────────────────────────────────────
     [HttpGet("snapshot")]
     public async Task<SnapshotExportDto> Snapshot(
         [FromQuery] int? examId,
@@ -189,6 +180,7 @@ public class ExportController : ControllerBase
         [FromQuery] DateOnly? from,
         [FromQuery] DateOnly? to,
         [FromQuery] string? commissionNo,
+        [FromQuery] int? districtId,
         CancellationToken ct = default)
     {
         // 1. Exams (filter tətbiq olunur)
@@ -196,10 +188,11 @@ public class ExportController : ControllerBase
             .Include(e => e.ExamCommissions).ThenInclude(ec => ec.Commission)
             .AsQueryable();
 
-        if (examId.HasValue)    examsQ = examsQ.Where(e => e.Id == examId.Value);
+        if (examId.HasValue) examsQ = examsQ.Where(e => e.Id == examId.Value);
         if (sectionId.HasValue) examsQ = examsQ.Where(e => e.SectionId == sectionId.Value);
-        if (from.HasValue)      examsQ = examsQ.Where(e => e.ExamDate >= from.Value);
-        if (to.HasValue)        examsQ = examsQ.Where(e => e.ExamDate <= to.Value);
+        if (from.HasValue) examsQ = examsQ.Where(e => e.ExamDate >= from.Value);
+        if (to.HasValue) examsQ = examsQ.Where(e => e.ExamDate <= to.Value);
+        if (districtId.HasValue) examsQ = examsQ.Where(e => e.DistrictId == districtId.Value);
         if (!string.IsNullOrWhiteSpace(commissionNo))
             examsQ = examsQ.Where(e => e.ExamCommissions.Any(ec => ec.Commission.CommissionNo == commissionNo));
 
@@ -315,18 +308,18 @@ public class ExportController : ControllerBase
             Source: "ResultsApp",
             Filters: new Dictionary<string, object?>
             {
-                ["examId"]       = examId,
-                ["sectionId"]    = sectionId,
-                ["from"]         = from?.ToString("yyyy-MM-dd"),
-                ["to"]           = to?.ToString("yyyy-MM-dd"),
+                ["examId"] = examId,
+                ["sectionId"] = sectionId,
+                ["from"] = from?.ToString("yyyy-MM-dd"),
+                ["to"] = to?.ToString("yyyy-MM-dd"),
                 ["commissionNo"] = commissionNo
             },
-            Sections:            sections,
-            Exercises:           exercises,
-            Commissions:         commissions,
+            Sections: sections,
+            Exercises: exercises,
+            Commissions: commissions,
             CommissionExercises: commissionExercises,
-            Exams:               exams,
-            ExamCommissions:     examCommissions,
-            Students:            students);
+            Exams: exams,
+            ExamCommissions: examCommissions,
+            Students: students);
     }
 }

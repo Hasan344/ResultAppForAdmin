@@ -37,11 +37,13 @@ public class ResultFileExportService : IResultFileExportService
 {
     private readonly AppDbContext _db;
     private readonly ILogger<ResultFileExportService> _log;
+    private readonly IScoringService _scoring;
 
-    public ResultFileExportService(AppDbContext db, ILogger<ResultFileExportService> log)
+    public ResultFileExportService(AppDbContext db, ILogger<ResultFileExportService> log, IScoringService scoring)
     {
         _db = db;
         _log = log;
+        _scoring = scoring;
     }
 
     // Başlıqlar — parent sistem qəbul etsin deyə ORİJİNALLA birebir (\n-lər daxil)
@@ -68,13 +70,13 @@ public class ResultFileExportService : IResultFileExportService
                 $"examId={examId} üçün (filtrlərlə) tələbə tapılmadı");
 
         // ── Keç/qal map-i (view → StudentId → IsPassed) ──────────────────────
-        var passMap = (await _db.StudentTotalScores.AsNoTracking()
-                        .Where(v => v.ExamId == examId)
-                        .Select(v => new { v.StudentId, v.IsPassed })
-                        .ToListAsync(ct))
-                        .GroupBy(v => v.StudentId)
-                        .ToDictionary(g => g.Key, g => g.Any(x => x.IsPassed)); 
-        
+        var passMap = new Dictionary<int, bool>(students.Count);
+        foreach (var s in students)
+        {
+            var fr = await _scoring.CalculateFinalScoreAsync(s.Id, examId, ct);
+            passMap[s.Id] = fr.Passed;
+        }
+
         var studentIds = students.Select(s => s.Id).ToList();
 
         var hasResult = (await _db.StudentExamResults.AsNoTracking()

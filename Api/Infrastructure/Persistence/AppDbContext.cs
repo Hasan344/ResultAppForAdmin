@@ -19,6 +19,7 @@ public class AppDbContext : DbContext
     public DbSet<Monitor> Monitors => Set<Monitor>();
     public DbSet<Representative> Representatives => Set<Representative>();
     public DbSet<ExamExpert> ExamExperts => Set<ExamExpert>();
+    public DbSet<ExamExpertSubprofessions> ExamExpertSubProfessions => Set<ExamExpertSubprofessions>();
     public DbSet<ExamMonitor> ExamMonitors => Set<ExamMonitor>();
     public DbSet<ExamRepresentative> ExamRepresentatives => Set<ExamRepresentative>();
     public DbSet<Gender> Genders => Set<Gender>();
@@ -28,12 +29,12 @@ public class AppDbContext : DbContext
     public DbSet<ImportBatch> ImportBatches => Set<ImportBatch>();
     public DbSet<Exercise> Exercises => Set<Exercise>();
     public DbSet<ScoringRule> ScoringRules => Set<ScoringRule>();
-    public DbSet<StudentExamResult> StudentExamResults => Set<StudentExamResult>(); 
+    public DbSet<StudentExamResult> StudentExamResults => Set<StudentExamResult>();
     public DbSet<CommissionStageRule> CommissionStageRules => Set<CommissionStageRule>();
     public DbSet<StudentAppealResult> StudentAppealResults => Set<StudentAppealResult>();
     // ── View (keyless) ──
     public DbSet<StudentTotalScoreView> StudentTotalScores => Set<StudentTotalScoreView>();
-
+    public DbSet<District> Districts => Set<District>();
     protected override void OnModelCreating(ModelBuilder b)
     {
         b.Entity<CommissionStageRule>(e =>
@@ -171,6 +172,13 @@ public class AppDbContext : DbContext
             e.HasKey(x => new { x.ExamId, x.ExpertId });
             e.HasOne(x => x.Exam).WithMany(x => x.ExamExperts).HasForeignKey(x => x.ExamId);
             e.HasOne(x => x.Expert).WithMany().HasForeignKey(x => x.ExpertId);
+        }); 
+        b.Entity<ExamExpertSubprofessions>(e =>
+        {
+            e.ToTable("Exam_Expert_SubProfessions");
+            e.HasKey(x => new { x.ExamId, x.ExpertId });
+            e.HasOne(x => x.Exam).WithMany(x => x.ExamExpertSubProfessions).HasForeignKey(x => x.ExamId);
+            e.HasOne(x => x.Expert).WithMany().HasForeignKey(x => x.ExpertId);
         });
 
         b.Entity<ExamMonitor>(e =>
@@ -268,6 +276,13 @@ public class AppDbContext : DbContext
             e.Property(x => x.ValidFrom).HasColumnName("valid_from");
             e.Property(x => x.ValidTo).HasColumnName("valid_to");
             e.HasOne(x => x.Exercise).WithMany().HasForeignKey(x => x.ExerciseId);
+        });
+       
+        b.Entity<District>(e =>
+        {
+            e.ToTable("districts");          // ← ForQab-dakı rayon cədvəlinin ADI (lazımsa dəyiş)
+            e.Property(x => x.Id).HasColumnName("id");
+            e.Property(x => x.Name).HasColumnName("name");
         });
 
         b.Entity<StudentExamResult>(e =>

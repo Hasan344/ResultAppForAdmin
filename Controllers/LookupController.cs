@@ -60,4 +60,11 @@ public class LookupController : ControllerBase
             .Select(c => new { c.Id, c.CommissionNo, c.Name, c.SectionId })
             .ToListAsync(ct);
     }
+
+    [HttpGet("districts")]
+    public async Task<IEnumerable<object>> Districts(CancellationToken ct) =>
+    await _db.Districts.AsNoTracking()
+        .OrderBy(d => d.Name)
+        .Select(d => new { d.Id, d.Name })
+        .ToListAsync(ct);
 }

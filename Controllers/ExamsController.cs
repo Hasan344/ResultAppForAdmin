@@ -59,7 +59,7 @@ public class ExamsController : ControllerBase
             .FirstOrDefaultAsync(x => x.Id == id, ct);
         if (e is null) return NotFound();
 
-        var expertCount  = await _db.ExamExperts.CountAsync(x => x.ExamId == id, ct);
+        var expertCount  = await _db.ExamExpertSubProfessions.CountAsync(x => x.ExamId == id, ct);
 
         // ── Monitors: role-bazlı count'lar ───────────────────────────────
         // Role: 1=İmtahan rəhbəri, 2=Nəzarətçi, 4=Könüllü, 5=Digər işçilər
@@ -95,7 +95,7 @@ public class ExamsController : ControllerBase
 
     [HttpGet("{id:int}/experts")]
     public async Task<IEnumerable<object>> Experts(int id, CancellationToken ct) =>
-        await _db.ExamExperts.AsNoTracking()
+        await _db.ExamExpertSubProfessions.AsNoTracking()
             .Where(x => x.ExamId == id)
             .Select(x => new {
                 x.Expert.Id, x.Expert.Name, x.Expert.Surname, x.Expert.Fname,
