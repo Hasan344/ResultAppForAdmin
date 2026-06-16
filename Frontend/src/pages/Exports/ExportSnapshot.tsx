@@ -31,6 +31,9 @@ type Snapshot = {
     exams: unknown[];
     exam_commissions: unknown[];
     students: unknown[];
+    experts: unknown[];
+    exam_experts: unknown[];
+    exam_expert_subprofessions: unknown[];
 };
 
 const inputCls =
@@ -119,6 +122,8 @@ export default function ExportSnapshot() {
             { label: "İmtahanlar", value: snap.exams.length },
             { label: "İmtahan ↔ Komissiya", value: snap.exam_commissions.length },
             { label: "Tələbələr", value: snap.students.length },
+            { label: "Ekspertlər", value: snap.experts.length },
+            { label: "İmtahan ekspertləri", value: snap.exam_expert_subprofessions.length },
         ]
         : [];
 

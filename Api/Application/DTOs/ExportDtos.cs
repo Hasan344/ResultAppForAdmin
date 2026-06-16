@@ -58,6 +58,19 @@ public record ExamCommissionExportDto(
     [property: JsonPropertyName("exam_id")]       int ExamId,
     [property: JsonPropertyName("commission_no")] string CommissionNo);
 
+public record ExpertExportDto(
+    [property: JsonPropertyName("id")] int Id,
+    [property: JsonPropertyName("name")] string Name,
+    [property: JsonPropertyName("surname")] string Surname,
+    [property: JsonPropertyName("fname")] string Fname,
+    [property: JsonPropertyName("fin_code")] string? FinCode,
+    [property: JsonPropertyName("section_id")] int? SectionId,
+    [property: JsonPropertyName("gender")] byte? Gender);
+
+
+public record ExamExpertSubprofessionExportDto(
+    [property: JsonPropertyName("exam_id")] int ExamId,
+    [property: JsonPropertyName("expert_id")] int ExpertId);
 // ─── students ────────────────────────────────────────────────────────────
 // photo_path hədəfdə var, ResultsApp-da yoxdur → null göndərilir.
 public record StudentExportDto(
@@ -88,4 +101,6 @@ public record SnapshotExportDto(
     [property: JsonPropertyName("commission_exercises")] List<CommissionExerciseExportDto> CommissionExercises,
     [property: JsonPropertyName("exams")]                List<ExamExportDto> Exams,
     [property: JsonPropertyName("exam_commissions")]     List<ExamCommissionExportDto> ExamCommissions,
-    [property: JsonPropertyName("students")]             List<StudentExportDto> Students);
+    [property: JsonPropertyName("students")]             List<StudentExportDto> Students,
+    [property: JsonPropertyName("experts")]               IEnumerable<ExpertExportDto> Experts,
+    [property: JsonPropertyName("exam_expert_subprofessions")] IEnumerable<ExamExpertSubprofessionExportDto> ExamExpertSubprofessions);

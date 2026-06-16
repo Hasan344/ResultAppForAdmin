@@ -1,5 +1,3 @@
-
-
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using ResultAppForAdmin.Api.Application.DTOs.Export;
@@ -9,6 +7,16 @@ using System.Linq;
 
 namespace ResultAppForAdmin.Api.Controllers;
 
+// ────────────────────────────────────────────────────────────────────────────
+// ExportController — exam-station-app (SQLite) layihəsinin master data-nı
+// çəkdiyi ixrac API-si. Station tərəf `GET /api/export/snapshot` çağırıb bütün
+// cədvəlləri tək cavabda alır (resultsapp-import.js → fetchSnapshot).
+//
+// Ekspertlər YALNIZ Exam_Expert_SubProfessions-dan gəlir (alt-ixtisas üzrə
+// təyin). Exam_Experts artıq istifadə olunmur.
+//
+// Bütün DTO-lar snake_case qaytarır (ExportDtos.cs-də [JsonPropertyName] ilə).
+// ────────────────────────────────────────────────────────────────────────────
 [ApiController]
 [Route("api/[controller]")]
 public class ExportController : ControllerBase
@@ -16,16 +24,21 @@ public class ExportController : ControllerBase
     private readonly AppDbContext _db;
     public ExportController(AppDbContext db) => _db = db;
 
+    // ────────────────────────────────────────────────────────────────────
+    // SECTIONS
+    // ────────────────────────────────────────────────────────────────────
     [HttpGet("sections")]
     public async Task<IEnumerable<SectionExportDto>> Sections(CancellationToken ct) =>
         await _db.Sections.AsNoTracking()
             .OrderBy(s => s.Id)
             .Select(s => new SectionExportDto(
-                s.Id,
-                s.Name,
+                s.Id, s.Name,
                 s.SectCode.HasValue ? s.SectCode.Value.ToString() : null))
             .ToListAsync(ct);
 
+    // ────────────────────────────────────────────────────────────────────
+    // EXERCISES
+    // ────────────────────────────────────────────────────────────────────
     [HttpGet("exercises")]
     public async Task<IEnumerable<ExerciseExportDto>> Exercises(CancellationToken ct) =>
         await _db.Exercises.AsNoTracking()
@@ -34,6 +47,9 @@ public class ExportController : ControllerBase
                 e.Id, e.Code, e.Name, e.Unit, e.Direction, e.DisplayOrder, null))
             .ToListAsync(ct);
 
+    // ────────────────────────────────────────────────────────────────────
+    // COMMISSIONS
+    // ────────────────────────────────────────────────────────────────────
     [HttpGet("commissions")]
     public async Task<IEnumerable<CommissionExportDto>> Commissions(
         [FromQuery] int? sectionId, CancellationToken ct = default)
@@ -47,6 +63,9 @@ public class ExportController : ControllerBase
             .ToListAsync(ct);
     }
 
+    // ────────────────────────────────────────────────────────────────────
+    // COMMISSION_EXERCISES — scoring_rules-dan törədilir
+    // ────────────────────────────────────────────────────────────────────
     [HttpGet("commission-exercises")]
     public async Task<IEnumerable<CommissionExerciseExportDto>> CommissionExercises(
         [FromQuery] string? commissionNo, CancellationToken ct = default)
@@ -55,7 +74,6 @@ public class ExportController : ControllerBase
         if (!string.IsNullOrWhiteSpace(commissionNo))
             rulesQ = rulesQ.Where(r => r.CommissionNo == commissionNo);
 
-        // (commission_no, exercise_id) cüt-lərini distinct çək, exercises ilə join
         var pairs = await rulesQ
              .Select(r => new { r.CommissionNo, r.ExerciseId })
              .ToListAsync(ct);
@@ -69,9 +87,7 @@ public class ExportController : ControllerBase
             .Distinct()
             .Where(p => exMap.ContainsKey(p.ExerciseId))
             .Select(p => new CommissionExerciseExportDto(
-                p.CommissionNo,
-                exMap[p.ExerciseId].Code,
-                exMap[p.ExerciseId].DisplayOrder))
+                p.CommissionNo, exMap[p.ExerciseId].Code, exMap[p.ExerciseId].DisplayOrder))
             .OrderBy(x => x.CommissionNo).ThenBy(x => x.DisplayOrder)
             .ToList();
     }
@@ -82,6 +98,7 @@ public class ExportController : ControllerBase
     [HttpGet("exams")]
     public async Task<IEnumerable<ExamExportDto>> Exams(
         [FromQuery] int? sectionId,
+        [FromQuery] int? districtId,
         [FromQuery] DateOnly? from,
         [FromQuery] DateOnly? to,
         [FromQuery] string? commissionNo,
@@ -92,19 +109,18 @@ public class ExportController : ControllerBase
             .AsQueryable();
 
         if (sectionId.HasValue) q = q.Where(e => e.SectionId == sectionId.Value);
-        if (from.HasValue)      q = q.Where(e => e.ExamDate >= from.Value);
-        if (to.HasValue)        q = q.Where(e => e.ExamDate <= to.Value);
+        if (districtId.HasValue) q = q.Where(e => e.DistrictId == districtId.Value);
+        if (from.HasValue) q = q.Where(e => e.ExamDate >= from.Value);
+        if (to.HasValue) q = q.Where(e => e.ExamDate <= to.Value);
         if (!string.IsNullOrWhiteSpace(commissionNo))
             q = q.Where(e => e.ExamCommissions.Any(ec => ec.Commission.CommissionNo == commissionNo));
 
         return await q.OrderByDescending(e => e.ExamDate).ThenBy(e => e.Id)
             .Select(e => new ExamExportDto(
-                e.Id,
-                e.Name,
+                e.Id, e.Name,
                 e.ExamDate.ToString("yyyy-MM-dd"),
                 e.SectionId == 0 ? (int?)null : e.SectionId,
-                null,                       // notes — ResultsApp-da yoxdur
-                null))                      // createdAt — ResultsApp-da yoxdur
+                null, null))
             .ToListAsync(ct);
     }
 
@@ -122,7 +138,7 @@ public class ExportController : ControllerBase
             .Include(ec => ec.Exam)
             .AsQueryable();
 
-        if (examId.HasValue)    q = q.Where(ec => ec.ExamId == examId.Value);
+        if (examId.HasValue) q = q.Where(ec => ec.ExamId == examId.Value);
         if (sectionId.HasValue) q = q.Where(ec => ec.Exam.SectionId == sectionId.Value);
 
         return await q
@@ -150,37 +166,49 @@ public class ExportController : ControllerBase
             q = q.Where(s => s.Exam.SectionId == sectionId.Value);
 
         return await q
-            .OrderBy(s => s.ExamId)
-            .ThenBy(s => s.CommissionNo)
-            .ThenBy(s => s.QrupNum)
-            .ThenBy(s => s.SNomer)
+            .OrderBy(s => s.ExamId).ThenBy(s => s.CommissionNo)
+            .ThenBy(s => s.QrupNum).ThenBy(s => s.SNomer)
             .Select(s => new StudentExportDto(
-                s.Id,
-                s.ExamId,
-                s.SNomer,
-                s.IsN,
-                s.Surname,
-                s.Name,
-                s.FatherName,
+                s.Id, s.ExamId, s.SNomer, s.IsN, s.Surname, s.Name, s.FatherName,
                 s.BirthDate.HasValue ? s.BirthDate.Value.ToString("yyyy-MM-dd") : null,
-                s.Gender,
-                s.QrupNum,
-                s.Kodixtisas,
-                s.IxtisasName,
-                s.AltNov,
-                s.CommissionNo,
-                null))                    // photo_path — ResultsApp-da yoxdur
+                s.Gender, s.QrupNum, s.Kodixtisas, s.IxtisasName, s.AltNov,
+                s.CommissionNo, null))
             .ToListAsync(ct);
     }
 
+    // ────────────────────────────────────────────────────────────────────
+    // EXPERTS — alt-ixtisas (Exam_Expert_SubProfessions) üzrə təyin olunanlar
+    // ────────────────────────────────────────────────────────────────────
+    [HttpGet("exam-expert-subprofessions")]
+    public async Task<IEnumerable<ExamExpertSubprofessionExportDto>> ExamExpertSubprofessions(
+        [FromQuery] int? examId,
+        [FromQuery] int? sectionId,
+        CancellationToken ct = default)
+    {
+        var q = _db.ExamExpertSubProfessions.AsNoTracking()
+            .Include(x => x.Exam)
+            .AsQueryable();
+
+        if (examId.HasValue) q = q.Where(x => x.ExamId == examId.Value);
+        if (sectionId.HasValue) q = q.Where(x => x.Exam.SectionId == sectionId.Value);
+
+        return await q
+            .OrderBy(x => x.ExamId).ThenBy(x => x.ExpertId)
+            .Select(x => new ExamExpertSubprofessionExportDto(x.ExamId, x.ExpertId))
+            .ToListAsync(ct);
+    }
+
+    // ────────────────────────────────────────────────────────────────────
+    // SNAPSHOT — hər şey bir cavabda
+    // ────────────────────────────────────────────────────────────────────
     [HttpGet("snapshot")]
     public async Task<SnapshotExportDto> Snapshot(
         [FromQuery] int? examId,
         [FromQuery] int? sectionId,
+        [FromQuery] int? districtId,
         [FromQuery] DateOnly? from,
         [FromQuery] DateOnly? to,
         [FromQuery] string? commissionNo,
-        [FromQuery] int? districtId,
         CancellationToken ct = default)
     {
         // 1. Exams (filter tətbiq olunur)
@@ -190,26 +218,25 @@ public class ExportController : ControllerBase
 
         if (examId.HasValue) examsQ = examsQ.Where(e => e.Id == examId.Value);
         if (sectionId.HasValue) examsQ = examsQ.Where(e => e.SectionId == sectionId.Value);
+        if (districtId.HasValue) examsQ = examsQ.Where(e => e.DistrictId == districtId.Value);
         if (from.HasValue) examsQ = examsQ.Where(e => e.ExamDate >= from.Value);
         if (to.HasValue) examsQ = examsQ.Where(e => e.ExamDate <= to.Value);
-        if (districtId.HasValue) examsQ = examsQ.Where(e => e.DistrictId == districtId.Value);
         if (!string.IsNullOrWhiteSpace(commissionNo))
             examsQ = examsQ.Where(e => e.ExamCommissions.Any(ec => ec.Commission.CommissionNo == commissionNo));
 
         var examEntities = await examsQ.ToListAsync(ct);
         var examIds = examEntities.Select(e => e.Id).ToList();
 
-        // 2. Filtr edilmiş exam-larla əlaqəli commission_no-lar
+        // 2. Əlaqəli commission_no-lar
         var relatedCommissionNos = examEntities
             .SelectMany(e => e.ExamCommissions.Select(ec => ec.Commission.CommissionNo))
             .Distinct()
             .ToList();
 
-        // Əgər filter yoxdursa bütün komissiyaları al
         var commissionsQ = _db.Commissions.AsNoTracking().AsQueryable();
         if (sectionId.HasValue)
             commissionsQ = commissionsQ.Where(c => c.SectionId == sectionId.Value);
-        if (examIds.Any() && (examId.HasValue || !string.IsNullOrWhiteSpace(commissionNo)))
+        if (examIds.Any() && (examId.HasValue || districtId.HasValue || !string.IsNullOrWhiteSpace(commissionNo)))
             commissionsQ = commissionsQ.Where(c => relatedCommissionNos.Contains(c.CommissionNo));
 
         var commissions = await commissionsQ
@@ -219,10 +246,10 @@ public class ExportController : ControllerBase
 
         var commissionNos = commissions.Select(c => c.CommissionNo).ToList();
 
-        // 3. Bu komissiyaların section_id-lərinə əsaslanaraq lazım olan sections
+        // 3. Lazım olan sections
         var sectionIds = commissions.Select(c => c.SectionId).Distinct().ToList();
         var sectionsQ = _db.Sections.AsNoTracking().AsQueryable();
-        if (sectionId.HasValue || examId.HasValue || !string.IsNullOrWhiteSpace(commissionNo))
+        if (sectionId.HasValue || examId.HasValue || districtId.HasValue || !string.IsNullOrWhiteSpace(commissionNo))
             sectionsQ = sectionsQ.Where(s => sectionIds.Contains(s.Id));
 
         var sections = await sectionsQ
@@ -232,33 +259,29 @@ public class ExportController : ControllerBase
                 s.SectCode.HasValue ? s.SectCode.Value.ToString() : null))
             .ToListAsync(ct);
 
-        // 4. Exercises (hər zaman hamısı — kiçik cədvəldir, scoring_rules-dakı bütün ID-lər referans verə bilər)
+        // 4. Exercises (hər zaman hamısı)
         var exercises = await _db.Exercises.AsNoTracking()
             .OrderBy(e => e.DisplayOrder).ThenBy(e => e.Id)
             .Select(e => new ExerciseExportDto(
                 e.Id, e.Code, e.Name, e.Unit, e.Direction, e.DisplayOrder, null))
             .ToListAsync(ct);
 
-        // 5. Commission-exercises — scoring_rules-dan törət
+        // 5. Commission-exercises — scoring_rules-dan
         var rulesQ = _db.ScoringRules.AsNoTracking().Where(r => r.IsActive);
-        if (commissionNos.Any() && (examId.HasValue || sectionId.HasValue || !string.IsNullOrWhiteSpace(commissionNo)))
+        if (commissionNos.Any() && (examId.HasValue || sectionId.HasValue || districtId.HasValue || !string.IsNullOrWhiteSpace(commissionNo)))
             rulesQ = rulesQ.Where(r => commissionNos.Contains(r.CommissionNo));
 
         var rulePairs = await rulesQ
             .Select(r => new { r.CommissionNo, r.ExerciseId })
             .ToListAsync(ct);
 
-        // exercises siyahısını yuxarıda artıq çəkmişik (4-cü addım).
-        // Onun Id→(Code, DisplayOrder) map-ini qururuq.
         var exMapForCe = exercises.ToDictionary(e => e.Id, e => new { e.Code, e.DisplayOrder });
 
         var commissionExercises = rulePairs
             .Distinct()
             .Where(p => exMapForCe.ContainsKey(p.ExerciseId))
             .Select(p => new CommissionExerciseExportDto(
-                p.CommissionNo,
-                exMapForCe[p.ExerciseId].Code,
-                exMapForCe[p.ExerciseId].DisplayOrder))
+                p.CommissionNo, exMapForCe[p.ExerciseId].Code, exMapForCe[p.ExerciseId].DisplayOrder))
             .OrderBy(x => x.CommissionNo).ThenBy(x => x.DisplayOrder)
             .ToList();
 
@@ -269,7 +292,7 @@ public class ExportController : ControllerBase
             .OrderBy(ec => ec.ExamId).ThenBy(ec => ec.CommissionNo)
             .ToList();
 
-        // 7. Exams DTO-larına çevir
+        // 7. Exams DTO
         var exams = examEntities
             .OrderByDescending(e => e.ExamDate).ThenBy(e => e.Id)
             .Select(e => new ExamExportDto(
@@ -280,28 +303,40 @@ public class ExportController : ControllerBase
             .ToList();
 
         // 8. Students
-        List<StudentExportDto> students;
-        if (examIds.Any())
-        {
-            var studentsQ = _db.Students.AsNoTracking()
-                .Where(s => examIds.Contains(s.ExamId));
-            if (!string.IsNullOrWhiteSpace(commissionNo))
-                studentsQ = studentsQ.Where(s => s.CommissionNo == commissionNo);
+        var studentsQ = _db.Students.AsNoTracking()
+            .Where(s => examIds.Contains(s.ExamId));
+        if (!string.IsNullOrWhiteSpace(commissionNo))
+            studentsQ = studentsQ.Where(s => s.CommissionNo == commissionNo);
 
-            students = await studentsQ
-                .OrderBy(s => s.ExamId).ThenBy(s => s.CommissionNo)
-                .ThenBy(s => s.QrupNum).ThenBy(s => s.SNomer)
-                .Select(s => new StudentExportDto(
-                    s.Id, s.ExamId, s.SNomer, s.IsN, s.Surname, s.Name, s.FatherName,
-                    s.BirthDate.HasValue ? s.BirthDate.Value.ToString("yyyy-MM-dd") : null,
-                    s.Gender, s.QrupNum, s.Kodixtisas, s.IxtisasName, s.AltNov,
-                    s.CommissionNo, null))
-                .ToListAsync(ct);
-        }
-        else
-        {
-            students = new List<StudentExportDto>();
-        }
+        var students = await studentsQ
+            .OrderBy(s => s.ExamId).ThenBy(s => s.CommissionNo)
+            .ThenBy(s => s.QrupNum).ThenBy(s => s.SNomer)
+            .Select(s => new StudentExportDto(
+                s.Id, s.ExamId, s.SNomer, s.IsN, s.Surname, s.Name, s.FatherName,
+                s.BirthDate.HasValue ? s.BirthDate.Value.ToString("yyyy-MM-dd") : null,
+                s.Gender, s.QrupNum, s.Kodixtisas, s.IxtisasName, s.AltNov,
+                s.CommissionNo, null))
+            .ToListAsync(ct);
+
+        // 9. Ekspertlər — YALNIZ Exam_Expert_SubProfessions (alt-ixtisas üzrə təyin)
+        var subProfLinks = await _db.ExamExpertSubProfessions.AsNoTracking()
+            .Where(x => examIds.Contains(x.ExamId))
+            .Select(x => new { x.ExamId, x.ExpertId })
+            .ToListAsync(ct);
+
+        var examExpertSubprofessions = subProfLinks
+            .Select(x => new ExamExpertSubprofessionExportDto(x.ExamId, x.ExpertId))
+            .OrderBy(x => x.ExamId).ThenBy(x => x.ExpertId)
+            .ToList();
+
+        var expertIds = subProfLinks.Select(x => x.ExpertId).Distinct().ToList();
+
+        var experts = await _db.Experts.AsNoTracking()
+            .Where(e => expertIds.Contains(e.Id))
+            .OrderBy(e => e.Surname).ThenBy(e => e.Name)
+            .Select(e => new ExpertExportDto(
+                e.Id, e.Name, e.Surname, e.Fname, e.FinCode, e.SectionId, e.Gender))
+            .ToListAsync(ct);
 
         return new SnapshotExportDto(
             ExportedAt: DateTime.UtcNow.ToString("o"),
@@ -310,6 +345,7 @@ public class ExportController : ControllerBase
             {
                 ["examId"] = examId,
                 ["sectionId"] = sectionId,
+                ["districtId"] = districtId,
                 ["from"] = from?.ToString("yyyy-MM-dd"),
                 ["to"] = to?.ToString("yyyy-MM-dd"),
                 ["commissionNo"] = commissionNo
@@ -320,6 +356,8 @@ public class ExportController : ControllerBase
             CommissionExercises: commissionExercises,
             Exams: exams,
             ExamCommissions: examCommissions,
-            Students: students);
+            Students: students,
+            Experts: experts,
+            ExamExpertSubprofessions: examExpertSubprofessions);
     }
 }

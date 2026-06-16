@@ -172,11 +172,13 @@ public class AppDbContext : DbContext
             e.HasKey(x => new { x.ExamId, x.ExpertId });
             e.HasOne(x => x.Exam).WithMany(x => x.ExamExperts).HasForeignKey(x => x.ExamId);
             e.HasOne(x => x.Expert).WithMany().HasForeignKey(x => x.ExpertId);
-        }); 
+        });
         b.Entity<ExamExpertSubprofessions>(e =>
         {
             e.ToTable("Exam_Expert_SubProfessions");
             e.HasKey(x => new { x.ExamId, x.ExpertId });
+            e.Property(x => x.ExamId).HasColumnName("Exam_Id");       // ← eklendi
+            e.Property(x => x.ExpertId).HasColumnName("Expert_Id");   // ← eklendi
             e.HasOne(x => x.Exam).WithMany(x => x.ExamExpertSubProfessions).HasForeignKey(x => x.ExamId);
             e.HasOne(x => x.Expert).WithMany().HasForeignKey(x => x.ExpertId);
         });

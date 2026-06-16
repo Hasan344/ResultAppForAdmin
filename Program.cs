@@ -41,16 +41,17 @@ builder.Services.AddProblemDetails();
 
 var app = builder.Build();
 
+
 if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();
     app.UseSwaggerUI();
 }
 
-// ── Global exception handler: həmişə JSON qaytarır ───────────────────────────
-// app.UseExceptionHandler() — ASP.NET-in default handler-i HTML qaytarır,
-// bu isə frontend-də "An error occurred..." kimi görünür.
-// Əvəzinə: özümüz JSON yazırıq.
+
+app.UseDefaultFiles();  
+app.UseStaticFiles();   
+
 app.UseExceptionHandler(errApp => errApp.Run(async ctx =>
 {
     var ex = ctx.Features.Get<IExceptionHandlerFeature>()?.Error;
@@ -74,5 +75,8 @@ app.UseCors();
 app.UseAuthorization();
 
 app.MapControllers();
+
+
+app.MapFallbackToFile("index.html");
 
 app.Run();

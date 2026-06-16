@@ -427,7 +427,7 @@ function StudentsTable({ rows }: { rows: Student[] }) {
 
 // ── Appeal Tab ────────────────────────────────────────────────────────────────
 function AppealTab({
-    examId, commissionNos, commissionFilter, onCommissionFilter,
+     commissionNos, commissionFilter, onCommissionFilter,
     data, loading, onUpdated
 }: {
     examId: number;
