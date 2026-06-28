@@ -95,14 +95,25 @@ public class ExamsController : ControllerBase
 
     [HttpGet("{id:int}/experts")]
     public async Task<IEnumerable<object>> Experts(int id, CancellationToken ct) =>
-        await _db.ExamExpertSubProfessions.AsNoTracking()
-            .Where(x => x.ExamId == id)
-            .Select(x => new {
-                x.Expert.Id, x.Expert.Name, x.Expert.Surname, x.Expert.Fname,
-                x.Expert.Profession, x.Expert.FinCode
-            })
-            .ToListAsync(ct);
-
+    await _db.ExamExpertSubProfessions.AsNoTracking()
+        .Where(x => x.ExamId == id)
+        .OrderBy(x => x.Expert.Surname).ThenBy(x => x.Expert.Name)
+        .Select(x => new {
+            x.Expert.Id,
+            x.Expert.Name,
+            x.Expert.Surname,
+            x.Expert.Fname,
+            x.Expert.FinCode,
+            Profession = x.Expert.Profession,
+            SubProfession = x.SubProfession != null ? x.SubProfession.Name : null,
+            x.RoomId,
+            RoomName = _db.ExamRooms
+                .Where(r => r.Id == x.RoomId)
+                .Select(r => r.Name)
+                .FirstOrDefault(),
+            x.IsAttended
+        })
+        .ToListAsync(ct);
     /// <summary>
     /// Exam-a bağlı monitor-lar.
     /// Optional `role` parametri ilə filtrlənir:
@@ -159,9 +170,84 @@ public class ExamsController : ControllerBase
         var exists = await _db.Exams.AnyAsync(e => e.Id == examId, ct);
         if (!exists) return NotFound($"examId={examId} tapılmadı");
 
-        var bytes = await _export.ExportAsync(examId, qrupNum, commissionNo, ct);
+        var bytes = await _export.ExportAsync(examId, qrupNum, commissionNo, null, null, null, ct);
         return File(bytes,
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             $"netice_exam{examId}.xlsx");
     }
+
+
+    [HttpGet("{examId:int}/result-file/split")]
+    public async Task<IActionResult> ExportResultFilesSplit(
+     int examId, [FromQuery] string? commissionNo, [FromQuery] int? qrupNum, CancellationToken ct)
+    {
+        if (!await _db.Exams.AnyAsync(e => e.Id == examId, ct))
+            return NotFound($"examId={examId} tapılmadı");
+
+        // Komissiyalar: filter verilibsə onu, yoxsa imtahandakı tələbələrdən götür
+        List<string> commissions;
+        if (!string.IsNullOrWhiteSpace(commissionNo))
+            commissions = new() { commissionNo };
+        else
+            commissions = await _db.Students.AsNoTracking()
+                .Where(s => s.ExamId == examId && (!qrupNum.HasValue || s.QrupNum == qrupNum.Value))
+                .Select(s => s.CommissionNo)
+                .Distinct().OrderBy(x => x).ToListAsync(ct);
+
+        // Çıxarılacaq fayllar: hər komissiya üçün ya tək fayl, ya alt-ixtisas başına bir fayl
+        var plan = new List<(string comm, string? kod, string? label, int? fenn, string suffix)>();
+        foreach (var comm in commissions)
+        {
+            var kods = await _db.ScoringRules.AsNoTracking()
+                .Where(r => r.CommissionNo == comm && r.Kodixtisas != null)
+                .Select(r => r.Kodixtisas!).Distinct().OrderBy(x => x).ToListAsync(ct);
+
+            if (kods.Count < 2)
+                plan.Add((comm, null, null, null, $"kom{comm}"));   // tək alt-ixtisas → saxlanılan ballar
+            else
+                foreach (var kod in kods)
+                {
+                    var (label, fenn) = SubProfessionMeta(kod);
+                    plan.Add((comm, kod, label, fenn, $"kom{comm}_{kod}"));
+                }
+        }
+
+        // Tək fayl → birbaşa xlsx
+        if (plan.Count == 1)
+        {
+            var f = plan[0];
+            var bytes = await _export.ExportAsync(examId, qrupNum, f.comm, f.kod, f.label, f.fenn, ct);
+            return File(bytes,
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                $"netice_exam{examId}.xlsx");
+        }
+
+        // Çox fayl → ZIP (446: kom62_UFH, kom62_ABT, kom62_KSI — hər biri 240 tələbə)
+        using var zipStream = new MemoryStream();
+        using (var zip = new System.IO.Compression.ZipArchive(
+            zipStream, System.IO.Compression.ZipArchiveMode.Create, leaveOpen: true))
+        {
+            foreach (var f in plan)
+            {
+                var bytes = await _export.ExportAsync(examId, qrupNum, f.comm, f.kod, f.label, f.fenn, ct);
+                var safe = f.suffix;
+                foreach (var c in Path.GetInvalidFileNameChars()) safe = safe.Replace(c, '_');
+                var entry = zip.CreateEntry($"netice_exam{examId}_{safe}.xlsx",
+                    System.IO.Compression.CompressionLevel.Optimal);
+                using var es = entry.Open();
+                es.Write(bytes, 0, bytes.Length);
+            }
+        }
+        zipStream.Position = 0;
+        return File(zipStream.ToArray(), "application/zip", $"netice_exam{examId}.zip");
+    }
+
+    private static (string label, int? fennKod) SubProfessionMeta(string kodixtisas) => kodixtisas switch
+    {
+        "UFH" => ("Ümumi fiziki hazırlıq", 33),
+        "ABT" => ("Adaptiv bədən tərbiyəsi", 34),
+        "KSI" => ("Kütləvi sağlamlaşdırıcı idman", 35),
+        _ => (kodixtisas, null)
+    };
+
 }

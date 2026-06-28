@@ -11,8 +11,9 @@ namespace ResultAppForAdmin.Api.Application.Services;
 public interface IImportService
 {
     /// <summary>
-    /// AUTO mod: hər sətir öz KODIXTISAS + imt_tarix-ə görə uyğun exam-a bağlanır.
-    /// Bir Excel faylında 25+ komissiya və 10+ tarix ola bilər.
+    /// AUTO mod: hər sətir öz KODIXTISAS + imt_tarix + IMTYERI_NAME-ə görə uyğun
+    /// exam-a bağlanır. Bir Excel faylında 25+ komissiya, 10+ tarix və bir neçə
+    /// bina ola bilər.
     /// </summary>
     Task<ImportResult> ImportStudentsAutoAsync(
         Stream xlsxStream,
@@ -71,14 +72,14 @@ public class ImportService : IImportService
 
         var col = BuildHeaderMap(range);
 
-        // Exam cache: (commissionNo, examDate) → examId
-        // Eyni gündə 2 növbə varsa ikisini də saxla, sonra saat ilə ayır
+        // Exam cache: hər imtahanın tarix + saat + BİNA + komissiyaları
         var allExams = await _db.Exams.AsNoTracking()
             .Include(e => e.ExamCommissions).ThenInclude(ec => ec.Commission)
             .Select(e => new ExamInfo(
                 e.Id,
                 e.ExamDate,
                 e.StartTime,
+                e.ExamBuldingId,
                 e.ExamCommissions.Select(ec => ec.Commission.CommissionNo).ToArray()))
             .ToListAsync(ct);
 
@@ -122,10 +123,15 @@ public class ImportService : IImportService
                 string cinsi = CellString(row, col, "cinsi").ToLowerInvariant();
                 int? fennKod = CellOptInt(row, col, "FENN_KOD");
 
-                // ── Exam tapma ────────────────────────────────────────────
+                // ── Bina id-sini həll et (exam tapmaqda KRİTİK rol oynayır) ──
+                int? buildingId = buildingCache.TryGetValue(NormalizeText(imtYeri), out var bId)
+                    ? bId
+                    : (int?)null;
+
+                // ── Exam tapma — komissiya + tarix + BİNA ─────────────────
                 var examDate = DateOnly.FromDateTime(imtTarix);
                 var examTime = TimeOnly.FromDateTime(imtTarix);
-                int examId = ResolveExamId(allExams, kodixtisas, examDate, examTime);
+                int examId = ResolveExamId(allExams, kodixtisas, examDate, examTime, buildingId);
 
                 // ── Batch lazımdırsa yarat ────────────────────────────────
                 if (!batches.TryGetValue(examId, out var batch))
@@ -156,9 +162,6 @@ public class ImportService : IImportService
                     failed++;
                     continue;
                 }
-
-                // ── Bina (optional, xəta vermir) ──────────────────────────
-                buildingCache.TryGetValue(NormalizeText(imtYeri), out int buildingId);
 
                 // ── Gender ────────────────────────────────────────────────
                 byte gender = ParseGender(cinsi);
@@ -231,6 +234,10 @@ public class ImportService : IImportService
         string? importedBy,
         CancellationToken ct = default)
     {
+        // MANUAL mod tək komissiya + tarix qəbul edir (bina parametri yoxdur).
+        // Komissiya + tarixə görə imtahanı tapırıq. Eyni gündə həmin komissiya
+        // birdən çox binada keçirilirsə bu mod qeyri-müəyyəndir — belə hallarda
+        // AUTO modu (bina üzrə dəqiq bağlayır) istifadə edin.
         var exam = await _db.Exams
             .Where(e => e.ExamDate == examDate
                      && e.ExamCommissions.Any(ec => ec.Commission.CommissionNo == commissionNo))
@@ -424,10 +431,13 @@ public class ImportService : IImportService
     }
 
     /// <summary>
-    /// KODIXTISAS + tarix + saat ilə uyğun examId tapır.
+    /// KODIXTISAS + tarix + BİNA (+ saat) ilə uyğun examId tapır.
+    /// Bina məlumdursa namizədlər binaya görə daraldılır — bu, eyni komissiya
+    /// eyni gündə iki binada keçiriləndə tələbələrin səhv imtahana düşməsinin
+    /// qarşısını alır.
     /// </summary>
     private static int ResolveExamId(
-        List<ExamInfo> all, string commissionNo, DateOnly date, TimeOnly time)
+        List<ExamInfo> all, string commissionNo, DateOnly date, TimeOnly time, int? buildingId)
     {
         var candidates = all
             .Where(e => e.ExamDate == date && e.CommissionNos.Contains(commissionNo))
@@ -439,10 +449,30 @@ public class ImportService : IImportService
                 "Exam_Commissions-da imtahan tapılmadı. " +
                 "ForQab-da Exam_Commissions cədvəlini yoxlayın.");
 
+        // ── Bina ilə daralt (əsas düzəliş) ──
+        if (buildingId.HasValue)
+        {
+            var byBuilding = candidates.Where(e => e.ExamBuldingId == buildingId.Value).ToList();
+            if (byBuilding.Count == 0)
+                throw new InvalidOperationException(
+                    $"Komissiya {commissionNo}, {date:yyyy-MM-dd} tarixində bu bina (id={buildingId}) " +
+                    "üçün imtahan tapılmadı. exam_building / Exam_Commissions uyğunluğunu yoxlayın.");
+            candidates = byBuilding;
+        }
+        else if (candidates.Count > 1)
+        {
+            // Bina adı tanınmadı VƏ eyni gündə birdən çox imtahan var →
+            // təhlükəsiz seçim mümkün deyil (köhnə kod burada səhv binaya bağlayırdı).
+            throw new InvalidOperationException(
+                $"Komissiya {commissionNo}, {date:yyyy-MM-dd}: bina adı tanınmadı və eyni gündə " +
+                "birdən çox imtahan var; dəqiq imtahan seçilə bilmir. IMTYERI_NAME-in " +
+                "exam_building.name ilə uyğun olduğunu yoxlayın.");
+        }
+
         if (candidates.Count == 1)
             return candidates[0].Id;
 
-        // Eyni gündə birdən çox imtahan → saata ən yaxın startTime-ı seç
+        // Eyni bina + gündə birdən çox slot → saata ən yaxın startTime
         var best = candidates
             .Where(e => e.StartTime.HasValue)
             .OrderBy(e => Math.Abs(
@@ -486,5 +516,6 @@ public class ImportService : IImportService
     }
 
     // ── Köməkçi record ────────────────────────────────────────────────────
-    private record ExamInfo(int Id, DateOnly ExamDate, TimeOnly? StartTime, string[] CommissionNos);
+    private record ExamInfo(
+        int Id, DateOnly ExamDate, TimeOnly? StartTime, int ExamBuldingId, string[] CommissionNos);
 }

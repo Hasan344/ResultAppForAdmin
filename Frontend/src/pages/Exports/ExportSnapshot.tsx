@@ -6,7 +6,8 @@
 //   • Önizləmə → hər cədvəlin sayını göstərir (yazma yoxdur)
 //   • JSON yüklə → snapshot-ı fayl kimi endirir
 //
-// Filtrlər: Rayon (siyahı), İmtahan ID, Komissiya №, tarix aralığı.
+// Filtrlər: İmtahan binası (siyahı), İmtahan ID, Komissiya №, tarix aralığı.
+// İmtahan binası siyahısı cari (qlobal) bölmə seçiminə görə süzülür.
 // Bölmə filtri yuxarıdakı qlobal seçicidən tətbiq olunur.
 
 import { useEffect, useState } from "react";
@@ -18,7 +19,7 @@ import { api } from "../../api/client";
 import { PageHeader, StatCard } from "../../components/ui";
 import { useSection } from "../../context/SectionContext";
 
-type District = { id: number; name: string };
+type Building = { id: number; name: string };
 
 type Snapshot = {
     exported_at: string;
@@ -34,6 +35,7 @@ type Snapshot = {
     experts: unknown[];
     exam_experts: unknown[];
     exam_expert_subprofessions: unknown[];
+    photos: unknown[];
 };
 
 const inputCls =
@@ -44,8 +46,8 @@ const inputCls =
 export default function ExportSnapshot() {
     const { sectionId } = useSection();
 
-    const [districts, setDistricts] = useState<District[]>([]);
-    const [districtId, setDistrictId] = useState("");
+    const [buildings, setBuildings] = useState<Building[]>([]);
+    const [buildingId, setBuildingId] = useState("");
     const [examId, setExamId] = useState("");
     const [commissionNo, setCommissionNo] = useState("");
     const [from, setFrom] = useState("");
@@ -56,18 +58,26 @@ export default function ExportSnapshot() {
     const [snap, setSnap] = useState<Snapshot | null>(null);
     const [error, setError] = useState<string | null>(null);
 
-    // Rayon siyahısını çək (endpoint hazır deyilsə səssiz keç — panel pozulmasın).
+    // İmtahan binalarını yüklə — YALNIZ cari bölməyə aid olanlar.
+    // Bölmə dəyişəndə siyahı yenidən çəkilir və əvvəlki bina seçimi sıfırlanır
+    // (həmin bina yeni bölmədə olmaya bilər). Endpoint hazır deyilsə səssiz keç —
+    // panel pozulmasın.
     useEffect(() => {
+        const params: Record<string, number> = {};
+        if (sectionId !== null) params.sectionId = sectionId;
+
         api
-            .get<District[]>("/lookup/districts")
-            .then((r) => setDistricts(r.data))
-            .catch(() => setDistricts([]));
-    }, []);
+            .get<Building[]>("/lookup/buildings", { params })
+            .then((r) => setBuildings(r.data))
+            .catch(() => setBuildings([]));
+
+        setBuildingId("");
+    }, [sectionId]);
 
     function buildParams() {
         const p: Record<string, string | number> = {};
         if (sectionId !== null) p.sectionId = sectionId;
-        if (districtId) p.districtId = districtId;
+        if (buildingId) p.buildingId = buildingId;
         if (examId.trim()) p.examId = examId.trim();
         if (commissionNo.trim()) p.commissionNo = commissionNo.trim();
         if (from) p.from = from;
@@ -124,6 +134,7 @@ export default function ExportSnapshot() {
             { label: "Tələbələr", value: snap.students.length },
             { label: "Ekspertlər", value: snap.experts.length },
             { label: "İmtahan ekspertləri", value: snap.exam_expert_subprofessions.length },
+            { label: "Şəkillər", value: snap.photos.length },
         ]
         : [];
 
@@ -138,18 +149,18 @@ export default function ExportSnapshot() {
             {/* Filtrlər */}
             <div className="rounded-2xl bg-white ring-1 ring-slate-200/70 shadow-soft p-6 mb-6">
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-                    {/* Rayon — siyahı */}
+                    {/* İmtahan binası — siyahı (cari bölməyə görə süzülür) */}
                     <div>
-                        <label className="block text-xs font-medium text-slate-600 mb-1.5">Rayon</label>
+                        <label className="block text-xs font-medium text-slate-600 mb-1.5">İmtahan binası</label>
                         <select
                             className={inputCls}
-                            value={districtId}
-                            onChange={(e) => setDistrictId(e.target.value)}
+                            value={buildingId}
+                            onChange={(e) => setBuildingId(e.target.value)}
                         >
                             <option value="">Hamısı</option>
-                            {districts.map((d) => (
-                                <option key={d.id} value={d.id}>
-                                    {d.name}
+                            {buildings.map((b) => (
+                                <option key={b.id} value={b.id}>
+                                    {b.name}
                                 </option>
                             ))}
                         </select>
@@ -187,8 +198,8 @@ export default function ExportSnapshot() {
 
                 <p className="text-xs text-slate-500 mt-3">
                     Bölmə filtri yuxarıdakı qlobal seçicidən tətbiq olunur
-                    {sectionId !== null ? ` (cari: ${sectionId})` : " (seçilməyib — bütün bölmələr)"}. Filtrlər
-                    boşdursa bütün data qaytarılır.
+                    {sectionId !== null ? ` (cari: ${sectionId})` : " (seçilməyib — bütün bölmələr)"}. İmtahan binası
+                    siyahısı seçilmiş bölməyə görə süzülür. Filtrlər boşdursa bütün data qaytarılır.
                 </p>
 
                 <div className="flex flex-wrap items-center gap-3 mt-5">

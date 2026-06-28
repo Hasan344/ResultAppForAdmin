@@ -128,8 +128,8 @@ export default function ScoringRules() {
   return (
     <div>
       <PageHeader
-        title="Bal Cədvəlləri"
-        description="Komissiya, cins və yaş aralığına görə bal qaydalarını idarə edin"
+        title="Normativlər"
+        description="Komissiya, cins və yaş aralığına görə normativləri idarə edin"
         icon={<SlidersHorizontal className="w-6 h-6" />}
         actions={
           <button onClick={startNew} className="btn-primary">

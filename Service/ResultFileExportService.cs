@@ -4,33 +4,21 @@ using ResultAppForAdmin.Api.Infrastructure.Persistence;
 
 namespace ResultAppForAdmin.Api.Application.Services;
 
-// ────────────────────────────────────────────────────────────────────────────
-// Bu servis ResultsApp datasından RƏSMİ "yekun nəticə" Excel-ini istehsal edir.
-// Çıxış formatı (parent sistemin gözlədiyi format — nümunə: TB-12_iyul_nəticə.xlsx):
-//
-//   IMTYERI_NAME | imt_tarix | QRUP_NUM | KODIXTISAS | IXTISAS | alt nov |
-//   S_NOMER | is_n | soy | adi | ata | tev | cinsi | FENN_KOD |
-//   İmt.İştirak(↵1-gəlməyib,↵5-gəlib) | Nəticə↵(true/false)
-//
-// Mənbə:
-//   • təsviri sütunlar  → Student entity (import zamanı dolub)
-//   • İştirak (5/1)      → Student.IsAttended  (gəlib=5, gəlməyib=1)
-//   • Nəticə (1/0)       → v_student_total_scores.IsPassed (məqbul=1, qeyri-məqbul=0)
-//
-// İş qaydası: gəlməyən (IsAttended=false) həmişə Nəticə=0. Nəticəsi olmayan
-// (view-da görünməyən) tələbə də 0 sayılır.
-// ────────────────────────────────────────────────────────────────────────────
 public interface IResultFileExportService
 {
     /// <summary>
     /// Bir imtahan üçün rəsmi nəticə Excel-ini byte[] kimi qaytarır.
-    /// qrupNum / commissionNo opsional filtrlərdir.
+    /// qrupNum / commissionNo / altNov opsional filtrlərdir.
+    /// altNov verilərsə yalnız həmin alt-ixtisasın tələbələri daxil olunur.
     /// </summary>
     Task<byte[]> ExportAsync(
-        int examId,
-        int? qrupNum = null,
-        string? commissionNo = null,
-        CancellationToken ct = default);
+    int examId,
+    int? qrupNum = null,
+    string? commissionNo = null,
+    string? rescoreKodixtisas = null,   
+    string? subProfessionLabel = null,  
+    int? fennKod = null,                
+    CancellationToken ct = default);
 }
 
 public class ResultFileExportService : IResultFileExportService
@@ -46,21 +34,23 @@ public class ResultFileExportService : IResultFileExportService
         _scoring = scoring;
     }
 
-    // Başlıqlar — parent sistem qəbul etsin deyə ORİJİNALLA birebir (\n-lər daxil)
     private const string AttHeader = "İmt.İştirak(\n1-gəlməyib,\n5-gəlib)";
     private const string ResHeader = "Nəticə\n(true/false)";
 
     public async Task<byte[]> ExportAsync(
         int examId,
-        int? qrupNum = null,
-        string? commissionNo = null,
+    int? qrupNum = null,
+    string? commissionNo = null,
+    string? rescoreKodixtisas = null,
+    string? subProfessionLabel = null,
+    int? fennKod = null,
         CancellationToken ct = default)
     {
         // ── Tələbələr ────────────────────────────────────────────────────────
         var q = _db.Students.AsNoTracking().Where(s => s.ExamId == examId);
         if (qrupNum.HasValue) q = q.Where(s => s.QrupNum == qrupNum.Value);
         if (!string.IsNullOrEmpty(commissionNo)) q = q.Where(s => s.CommissionNo == commissionNo);
-
+      
         var students = await q
             .OrderBy(s => s.QrupNum).ThenBy(s => s.SNomer)
             .ToListAsync(ct);
@@ -73,7 +63,9 @@ public class ResultFileExportService : IResultFileExportService
         var passMap = new Dictionary<int, bool>(students.Count);
         foreach (var s in students)
         {
-            var fr = await _scoring.CalculateFinalScoreAsync(s.Id, examId, ct);
+            var fr = rescoreKodixtisas is null
+                ? await _scoring.CalculateFinalScoreAsync(s.Id, examId, ct)
+                : await _scoring.CalculateFinalScoreAsync(s.Id, examId, rescoreKodixtisas, ct);
             passMap[s.Id] = fr.Passed;
         }
 
@@ -104,7 +96,6 @@ public class ResultFileExportService : IResultFileExportService
         int r = 2;
         foreach (var s in students)
         {
-            // gəlməyibsə nəticə həmişə 0; gəlibsə view-dakı IsPassed
             bool attended = hasResult.Contains(s.Id);
             bool passed = attended && passMap.GetValueOrDefault(s.Id, false);
 
@@ -113,7 +104,7 @@ public class ResultFileExportService : IResultFileExportService
             ws.Cell(r, 3).Value = s.QrupNum;
             ws.Cell(r, 4).Value = s.Kodixtisas;
             ws.Cell(r, 5).Value = s.IxtisasName;
-            ws.Cell(r, 6).Value = s.AltNov;
+            ws.Cell(r, 6).Value = subProfessionLabel ?? s.AltNov;
             ws.Cell(r, 7).Value = s.SNomer;
             ws.Cell(r, 8).Value = s.IsN;
             ws.Cell(r, 9).Value = s.Surname;
@@ -121,9 +112,9 @@ public class ResultFileExportService : IResultFileExportService
             ws.Cell(r, 11).Value = s.FatherName;
             ws.Cell(r, 12).Value = s.BirthDate?.ToString("dd.MM.yyyy");
             ws.Cell(r, 13).Value = GenderText(s.Gender);
-            ws.Cell(r, 14).Value = s.FennKod;
-            ws.Cell(r, 15).Value = attended ? 5 : 1;     // İştirak
-            ws.Cell(r, 16).Value = passed ? 1 : 0;       // Nəticə (true/false → 1/0)
+            ws.Cell(r, 14).Value = fennKod ?? s.FennKod;
+            ws.Cell(r, 15).Value = attended ? 5 : 1;
+            ws.Cell(r, 16).Value = passed ? 1 : 0;
             r++;
         }
 
@@ -133,8 +124,8 @@ public class ResultFileExportService : IResultFileExportService
         wb.SaveAs(ms);
 
         _log.LogInformation(
-            "ResultFile export: examId={ExamId} qrup={Qrup} comm={Comm} rows={Rows}",
-            examId, qrupNum, commissionNo, students.Count);
+            "ResultFile export: examId={ExamId} qrup={Qrup} comm={Comm} kodixtisas={AltNov} rows={Rows}",
+            examId, qrupNum, commissionNo, fennKod, students.Count);
 
         return ms.ToArray();
     }

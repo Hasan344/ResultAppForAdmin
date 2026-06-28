@@ -1,4 +1,4 @@
-using ResultAppForAdmin.Api.Application.DTOs;
+﻿using ResultAppForAdmin.Api.Application.DTOs;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using ResultAppForAdmin.Api.Infrastructure.Persistence;
@@ -21,7 +21,7 @@ public class StudentsController : ControllerBase
         CancellationToken ct = default)
     {
         var q = _db.Students.AsNoTracking().Where(s => s.ExamId == examId);
-        if (qrupNum.HasValue)            q = q.Where(s => s.QrupNum == qrupNum.Value);
+        if (qrupNum.HasValue) q = q.Where(s => s.QrupNum == qrupNum.Value);
         if (!string.IsNullOrEmpty(commissionNo)) q = q.Where(s => s.CommissionNo == commissionNo);
 
         return await q.OrderBy(s => s.QrupNum).ThenBy(s => s.SNomer)
@@ -29,6 +29,52 @@ public class StudentsController : ControllerBase
                 s.Id, s.SNomer, s.IsN, s.Surname, s.Name, s.FatherName,
                 s.BirthDate, s.Gender, s.QrupNum, s.Kodixtisas, s.IxtisasName,
                 s.AltNov, s.CommissionNo, s.IsAttended))
+            .ToListAsync(ct);
+    }
+
+    /// <summary>
+    /// Ümumi bazadan tələbə axtarışı — ad / soyad / iş № (is_n) üzrə.
+    /// Hər nəticə sətri = bir imtahan iştirakı. ?sectionId verilsə cari bölmə
+    /// ilə məhdudlaşır. Maksimum 100 nəticə.
+    /// </summary>
+    [HttpGet("search")]
+    public async Task<IEnumerable<object>> Search(
+        [FromQuery] string q,
+        [FromQuery] int? sectionId,
+        CancellationToken ct = default)
+    {
+        var term = (q ?? "").Trim();
+        if (term.Length < 2) return Array.Empty<object>();
+
+        var query = _db.Students.AsNoTracking()
+            .Where(s =>
+                EF.Functions.Like(s.Surname, $"%{term}%") ||
+                EF.Functions.Like(s.Name, $"%{term}%") ||
+                EF.Functions.Like(s.IsN, $"%{term}%"));
+
+        if (sectionId.HasValue)
+            query = query.Where(s => s.Exam.SectionId == sectionId.Value);
+
+        return await query
+            .OrderBy(s => s.Surname).ThenBy(s => s.Name).ThenByDescending(s => s.ExamId)
+            .Take(100)
+            .Select(s => new {
+                s.Id,
+                s.ExamId,
+                ExamName = s.Exam.Name,
+                ExamDate = s.Exam.ExamDate,
+                s.IsN,
+                s.Surname,
+                s.Name,
+                s.FatherName,
+                s.Gender,
+                s.QrupNum,
+                s.CommissionNo,
+                s.Kodixtisas,
+                s.IxtisasName,
+                s.AltNov,
+                s.IsAttended
+            })
             .ToListAsync(ct);
     }
 

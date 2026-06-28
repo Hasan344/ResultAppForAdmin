@@ -1,11 +1,12 @@
 import { jsx as _jsx, jsxs as _jsxs, Fragment as _Fragment } from "react/jsx-runtime";
 import { useEffect, useRef, useState } from "react";
 import { useParams, Link } from "react-router-dom";
-import { ArrowLeft, Info, UserCheck, Eye, Users2, Building2, Layers, Clock, CalendarDays, Sun, Hash, CheckCircle2, Circle, Crown, HeartHandshake, Briefcase, ClipboardList, Scale, Save, X, ChevronDown, ChevronRight, Download, Loader2 } from "lucide-react";
+import { ArrowLeft, Info, UserCheck, Eye, Users2, Building2, Layers, Clock, CalendarDays, Sun, Hash, Crown, HeartHandshake, Briefcase, ClipboardList, Scale, Save, X, ChevronDown, ChevronRight, Download, Loader2, Search } from "lucide-react";
 import { api } from "../../api/client";
 import { MONITOR_ROLE, MONITOR_ROLE_LABELS } from "../../types";
 import { LoadingState, EmptyState } from "../../components/ui";
-import { formatDate, genderLabel } from "../../lib/format";
+import { formatDate } from "../../lib/format";
+import { StudentRow } from "./StudentSubProfessionBreakdown";
 const TABS = [
     { key: "info", label: "Məlumat", icon: _jsx(Info, { className: "w-4 h-4" }) },
     { key: "experts", label: "Ekspertlər", icon: _jsx(UserCheck, { className: "w-4 h-4" }), countKey: "expertCount" },
@@ -67,11 +68,15 @@ export default function ExamDetail() {
     async function downloadResultFile() {
         setDownloading(true);
         try {
-            const r = await api.get(`/exams/${examId}/result-file`, { responseType: "blob" });
+            const r = await api.get(`/exams/${examId}/result-file/split`, {
+                responseType: "blob",
+            });
+            const ct = r.headers["content-type"] ?? "";
+            const isZip = ct.includes("zip");
             const url = URL.createObjectURL(r.data);
             const a = document.createElement("a");
             a.href = url;
-            a.download = `netice_exam${examId}.xlsx`;
+            a.download = isZip ? `netice_exam${examId}.zip` : `netice_exam${examId}.xlsx`;
             a.click();
             URL.revokeObjectURL(url);
         }
@@ -97,9 +102,9 @@ export default function ExamDetail() {
                                 const count = tabCount(t.key);
                                 const active = tab === t.key;
                                 return (_jsxs("button", { onClick: () => setTab(t.key), className: `relative inline-flex items-center gap-2 px-4 py-3.5 text-sm font-medium transition-colors ${active ? "text-brand-700" : "text-slate-500 hover:text-slate-800"}`, children: [_jsx("span", { className: active ? "text-brand-600" : "text-slate-400", children: t.icon }), t.label, count !== null && (_jsx("span", { className: `text-xs px-2 py-0.5 rounded-full ${active ? "bg-brand-100 text-brand-700" : "bg-slate-100 text-slate-600"}`, children: count })), active && (_jsx("span", { className: "absolute inset-x-2 -bottom-px h-0.5 bg-brand-600 rounded-full" }))] }, t.key));
-                            }) }) }), _jsxs("div", { className: "p-6", children: [tab === "info" && _jsx(InfoTab, { exam: exam }), tab === "monitors" && (_jsxs(_Fragment, { children: [_jsx(MonitorRoleSubTabs, { exam: exam, value: monitorRole, onChange: setMonitorRole }), tabLoading ? _jsx(LoadingState, {}) : (_jsx(PeopleTable, { rows: tabData, showRole: monitorRole === "all", emptyLabel: monitorRole === "all"
+                            }) }) }), _jsxs("div", { className: "p-6", children: [tab === "info" && _jsx(InfoTab, { exam: exam }), tab === "monitors" && (_jsxs(_Fragment, { children: [_jsx(MonitorRoleSubTabs, { exam: exam, value: monitorRole, onChange: setMonitorRole }), tabLoading ? _jsx(LoadingState, {}) : (_jsx(PeopleTable, { rows: tabData, showRole: monitorRole === "all", showRoom: true, emptyLabel: monitorRole === "all"
                                             ? "Nəzarətçi tapılmadı"
-                                            : `${MONITOR_ROLE_LABELS[monitorRole]} kateqoriyasında heç kim yoxdur` }))] })), tab === "representatives" && (tabLoading ? _jsx(LoadingState, {}) : (_jsx(PeopleTable, { rows: tabData, emptyLabel: "N\u00FCmay\u0259nd\u0259 tap\u0131lmad\u0131" }))), tab === "experts" && (tabLoading ? _jsx(LoadingState, {}) : (_jsx(PeopleTable, { rows: tabData, emptyLabel: "Ekspert tap\u0131lmad\u0131" }))), tab === "students" && (tabLoading ? _jsx(LoadingState, {}) : (_jsx(StudentsTable, { rows: tabData }))), tab === "appeals" && (_jsx(AppealTab, { examId: examId, commissionNos: exam.commissionNos, commissionFilter: commissionFilter, onCommissionFilter: setCommissionFilter, data: appealData, loading: tabLoading, onUpdated: () => {
+                                            : `${MONITOR_ROLE_LABELS[monitorRole]} kateqoriyasında heç kim yoxdur` }))] })), tab === "representatives" && (tabLoading ? _jsx(LoadingState, {}) : (_jsx(PeopleTable, { rows: tabData, emptyLabel: "N\u00FCmay\u0259nd\u0259 tap\u0131lmad\u0131" }))), tab === "experts" && (tabLoading ? _jsx(LoadingState, {}) : (_jsx(PeopleTable, { rows: tabData, showProfession: true, showRoom: true, emptyLabel: "Ekspert tap\u0131lmad\u0131" }))), tab === "students" && (tabLoading ? _jsx(LoadingState, {}) : (_jsx(StudentsTable, { rows: tabData }))), tab === "appeals" && (_jsx(AppealTab, { examId: examId, commissionNos: exam.commissionNos, commissionFilter: commissionFilter, onCommissionFilter: setCommissionFilter, data: appealData, loading: tabLoading, onUpdated: () => {
                                     // nəticə yeniləndi — reload et
                                     setTabLoading(true);
                                     const params = { examId };
@@ -140,18 +145,33 @@ function MonitorRoleSubTabs({ exam, value, onChange }) {
             }) }) }));
 }
 // ── People Table (experts, monitors, representatives) ─────────────────────────
-function PeopleTable({ rows, showRole = false, emptyLabel }) {
+// Görev 1: showProfession → İxtisas (alt-ixtisas), showRoom → Məntəqə sütunu
+function PeopleTable({ rows, showRole = false, showProfession = false, showRoom = false, emptyLabel }) {
     if (rows.length === 0) {
         return _jsx(EmptyState, { icon: _jsx(Users2, { className: "w-7 h-7" }), title: emptyLabel });
     }
-    return (_jsx("div", { className: "overflow-x-auto -mx-6 lg:-mx-0 rounded-xl border border-slate-100", children: _jsxs("table", { className: "table-modern", children: [_jsx("thead", { children: _jsxs("tr", { children: [_jsx("th", { children: "Soyad" }), _jsx("th", { children: "Ad" }), _jsx("th", { children: "Ata ad\u0131" }), _jsx("th", { children: "F\u0130N" }), showRole && _jsx("th", { children: "Rol" })] }) }), _jsx("tbody", { children: rows.map((r, i) => (_jsxs("tr", { children: [_jsx("td", { className: "font-medium text-slate-900", children: String(r.surname ?? "") }), _jsx("td", { children: String(r.name ?? "") }), _jsx("td", { className: "text-slate-600", children: String(r.fname ?? "") }), _jsx("td", { className: "font-mono text-xs text-slate-500", children: String(r.finCode ?? "") }), showRole && (_jsx("td", { children: typeof r.role === "number" ? (_jsxs("span", { className: "badge-brand", children: [ROLE_ICON[r.role] ?? null, MONITOR_ROLE_LABELS[r.role] ?? `Rol ${r.role}`] })) : _jsx("span", { className: "text-slate-300", children: "\u2014" }) }))] }, i))) })] }) }));
+    return (_jsx("div", { className: "overflow-x-auto -mx-6 lg:-mx-0 rounded-xl border border-slate-100", children: _jsxs("table", { className: "table-modern", children: [_jsx("thead", { children: _jsxs("tr", { children: [_jsx("th", { children: "Soyad" }), _jsx("th", { children: "Ad" }), _jsx("th", { children: "Ata ad\u0131" }), _jsx("th", { children: "F\u0130N" }), showProfession && _jsx("th", { children: "\u0130xtisas" }), showRoom && _jsx("th", { children: "M\u0259nt\u0259q\u0259" }), showRole && _jsx("th", { children: "Rol" })] }) }), _jsx("tbody", { children: rows.map((r, i) => (_jsxs("tr", { children: [_jsx("td", { className: "font-medium text-slate-900", children: String(r.surname ?? "") }), _jsx("td", { children: String(r.name ?? "") }), _jsx("td", { className: "text-slate-600", children: String(r.fname ?? "") }), _jsx("td", { className: "font-mono text-xs text-slate-500", children: String(r.finCode ?? "") }), showProfession && (_jsx("td", { className: "text-slate-700", children: r.subProfession
+                                    ? String(r.subProfession)
+                                    : r.profession ? String(r.profession) : "—" })), showRoom && (_jsx("td", { className: "text-slate-700", children: r.roomName
+                                    ? String(r.roomName)
+                                    : (r.roomId ? `#${String(r.roomId)}` : "—") })), showRole && (_jsx("td", { children: typeof r.role === "number" ? (_jsxs("span", { className: "badge-brand", children: [ROLE_ICON[r.role] ?? null, MONITOR_ROLE_LABELS[r.role] ?? `Rol ${r.role}`] })) : _jsx("span", { className: "text-slate-300", children: "\u2014" }) }))] }, i))) })] }) }));
 }
-// ── Students Table ────────────────────────────────────────────────────────────
+// ── Students Table (ad/soyad filtri + açılabilir nəticələr) ───────────────────
+// StudentRow ./StudentSubProfessionBreakdown-dan gəlir:
+//   alt-ixtisaslı (62) → 3 alt-ixtisas bal kırılımı
+//   digər tələbələr     → standart nəticə chip-ləri
 function StudentsTable({ rows }) {
-    if (rows.length === 0) {
-        return (_jsx(EmptyState, { icon: _jsx(Users2, { className: "w-7 h-7" }), title: "T\u0259l\u0259b\u0259 yoxdur", description: "Bu imtahana h\u0259l\u0259 t\u0259l\u0259b\u0259 import edilm\u0259yib." }));
-    }
-    return (_jsx("div", { className: "overflow-x-auto -mx-6 lg:-mx-0 rounded-xl border border-slate-100", children: _jsxs("table", { className: "table-modern", children: [_jsx("thead", { children: _jsxs("tr", { children: [_jsx("th", { children: "Qrup" }), _jsx("th", { children: "\u2116" }), _jsx("th", { children: "\u0130\u015F \u2116" }), _jsx("th", { children: "T\u0259l\u0259b\u0259" }), _jsx("th", { children: "Cins" }), _jsx("th", { children: "\u0130xtisas" }), _jsx("th", { children: "\u0130\u015Ftirak" })] }) }), _jsx("tbody", { children: rows.map((s) => (_jsxs("tr", { children: [_jsx("td", { className: "tabular-nums font-medium", children: s.qrupNum }), _jsx("td", { className: "tabular-nums text-slate-500", children: s.sNomer ?? "—" }), _jsx("td", { className: "tabular-nums font-mono text-xs text-slate-500", children: s.isN }), _jsxs("td", { className: "font-medium text-slate-900", children: [s.surname, " ", s.name, " ", _jsx("span", { className: "text-slate-500 font-normal", children: s.fatherName })] }), _jsx("td", { children: genderLabel(s.gender) }), _jsxs("td", { children: [_jsx("div", { className: "text-slate-700", children: s.ixtisasName }), _jsxs("div", { className: "text-xs text-slate-500 font-mono", children: [s.kodixtisas, s.altNov ? ` · ${s.altNov}` : ""] })] }), _jsx("td", { children: s.isAttended ? (_jsxs("span", { className: "badge-success", children: [_jsx(CheckCircle2, { className: "w-3.5 h-3.5" }), "\u0130\u015Ftirak etdi"] })) : (_jsxs("span", { className: "badge-neutral", children: [_jsx(Circle, { className: "w-3.5 h-3.5" }), "Qeyd yox"] })) })] }, s.id))) })] }) }));
+    const [query, setQuery] = useState("");
+    const q = query.trim().toLowerCase();
+    const filtered = q
+        ? rows.filter((s) => {
+            const full = `${s.surname ?? ""} ${s.name ?? ""} ${s.fatherName ?? ""}`.toLowerCase();
+            return full.includes(q) || String(s.isN ?? "").toLowerCase().includes(q);
+        })
+        : rows;
+    return (_jsxs("div", { children: [_jsxs("div", { className: "relative max-w-xs mb-4", children: [_jsx(Search, { className: "absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" }), _jsx("input", { value: query, onChange: (e) => setQuery(e.target.value), placeholder: "Ad, soyad v\u0259 ya i\u015F \u2116\u2026", className: "input pl-9" })] }), filtered.length === 0 ? (_jsx(EmptyState, { icon: _jsx(Users2, { className: "w-7 h-7" }), title: rows.length === 0 ? "Tələbə yoxdur" : "Nəticə tapılmadı", description: rows.length === 0
+                    ? "Bu imtahana hələ tələbə import edilməyib."
+                    : "Axtarışa uyğun tələbə tapılmadı." })) : (_jsx("div", { className: "overflow-x-auto -mx-6 lg:-mx-0 rounded-xl border border-slate-100", children: _jsxs("table", { className: "table-modern", children: [_jsx("thead", { children: _jsxs("tr", { children: [_jsx("th", { className: "w-8" }), _jsx("th", { children: "Qrup" }), _jsx("th", { children: "\u2116" }), _jsx("th", { children: "\u0130\u015F \u2116" }), _jsx("th", { children: "T\u0259l\u0259b\u0259" }), _jsx("th", { children: "Cins" }), _jsx("th", { children: "\u0130xtisas" }), _jsx("th", { children: "\u0130\u015Ftirak" })] }) }), _jsx("tbody", { children: filtered.map((s) => _jsx(StudentRow, { s: s }, s.id)) })] }) }))] }));
 }
 // ── Appeal Tab ────────────────────────────────────────────────────────────────
 function AppealTab({ commissionNos, commissionFilter, onCommissionFilter, data, loading, onUpdated }) {

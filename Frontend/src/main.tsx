@@ -6,11 +6,11 @@ import { SectionProvider } from "./context/SectionContext";
 import "./index.css";
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
-  <React.StrictMode>
+    <React.StrictMode>
         <BrowserRouter basename="/neticeler">
-      <SectionProvider>
-        <App />
-      </SectionProvider>
-    </BrowserRouter>
-  </React.StrictMode>
+            <SectionProvider>
+                <App />
+            </SectionProvider>
+        </BrowserRouter>
+    </React.StrictMode>
 );

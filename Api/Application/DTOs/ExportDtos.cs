@@ -90,6 +90,14 @@ public record StudentExportDto(
     [property: JsonPropertyName("commission_no")] string CommissionNo,
     [property: JsonPropertyName("photo_path")]    string? PhotoPath);
 
+public record PhotoExportDto(
+    [property: JsonPropertyName("id")] int Id,
+    [property: JsonPropertyName("is_n")] string IsN,        // ⚠ Student.IsN ilə eyni tip olmalı
+    [property: JsonPropertyName("ad")] string? Ad,
+    [property: JsonPropertyName("soyad")] string? Soyad,
+    [property: JsonPropertyName("ata")] string? Ata,
+    [property: JsonPropertyName("photo")] string? Photo);
+
 // ─── Toplu snapshot ──────────────────────────────────────────────────────
 public record SnapshotExportDto(
     [property: JsonPropertyName("exported_at")]          string ExportedAt,
@@ -103,4 +111,5 @@ public record SnapshotExportDto(
     [property: JsonPropertyName("exam_commissions")]     List<ExamCommissionExportDto> ExamCommissions,
     [property: JsonPropertyName("students")]             List<StudentExportDto> Students,
     [property: JsonPropertyName("experts")]               IEnumerable<ExpertExportDto> Experts,
-    [property: JsonPropertyName("exam_expert_subprofessions")] IEnumerable<ExamExpertSubprofessionExportDto> ExamExpertSubprofessions);
+    [property: JsonPropertyName("exam_expert_subprofessions")] IEnumerable<ExamExpertSubprofessionExportDto> ExamExpertSubprofessions,
+    [property: JsonPropertyName("photos")] IEnumerable<PhotoExportDto> Photos);

@@ -198,14 +198,39 @@ public class ExportController : ControllerBase
             .ToListAsync(ct);
     }
 
-    // ────────────────────────────────────────────────────────────────────
-    // SNAPSHOT — hər şey bir cavabda
-    // ────────────────────────────────────────────────────────────────────
+    [HttpGet("photos")]
+    public async Task<IEnumerable<PhotoExportDto>> Photos(
+    [FromQuery] int? examId,
+    [FromQuery] string? commissionNo,
+    [FromQuery] int? sectionId,
+    CancellationToken ct = default)
+    {
+        var sQ = _db.Students.AsNoTracking().AsQueryable();
+        if (examId.HasValue) sQ = sQ.Where(s => s.ExamId == examId.Value);
+        if (!string.IsNullOrWhiteSpace(commissionNo)) sQ = sQ.Where(s => s.CommissionNo == commissionNo);
+        if (sectionId.HasValue) sQ = sQ.Where(s => s.Exam.SectionId == sectionId.Value);
+
+        var isNs = await sQ.Select(s => s.IsN).Distinct().ToListAsync(ct);
+
+        // Xam baytları əvvəlcə çək (Convert.ToBase64String SQL-ə tərcümə olunmur)
+        var rows = await _db.Photos.AsNoTracking()
+            .Where(p => isNs.Contains(p.IsN))
+            .OrderBy(p => p.IsN)
+            .Select(p => new { p.Id, p.IsN, p.Ad, p.Soyad, p.Ata, p.PhotoBase64 })
+            .ToListAsync(ct);
+
+        return rows.Select(p => new PhotoExportDto(
+            p.Id, p.IsN, p.Ad, p.Soyad, p.Ata,
+            p.PhotoBase64 == null ? null : Convert.ToBase64String(p.PhotoBase64)))
+            .ToList();
+    }
+
+
     [HttpGet("snapshot")]
     public async Task<SnapshotExportDto> Snapshot(
         [FromQuery] int? examId,
         [FromQuery] int? sectionId,
-        [FromQuery] int? districtId,
+        [FromQuery] int? buildingId,
         [FromQuery] DateOnly? from,
         [FromQuery] DateOnly? to,
         [FromQuery] string? commissionNo,
@@ -218,7 +243,7 @@ public class ExportController : ControllerBase
 
         if (examId.HasValue) examsQ = examsQ.Where(e => e.Id == examId.Value);
         if (sectionId.HasValue) examsQ = examsQ.Where(e => e.SectionId == sectionId.Value);
-        if (districtId.HasValue) examsQ = examsQ.Where(e => e.DistrictId == districtId.Value);
+        if (buildingId.HasValue) examsQ = examsQ.Where(e => e.ExamBuldingId == buildingId.Value);
         if (from.HasValue) examsQ = examsQ.Where(e => e.ExamDate >= from.Value);
         if (to.HasValue) examsQ = examsQ.Where(e => e.ExamDate <= to.Value);
         if (!string.IsNullOrWhiteSpace(commissionNo))
@@ -236,7 +261,7 @@ public class ExportController : ControllerBase
         var commissionsQ = _db.Commissions.AsNoTracking().AsQueryable();
         if (sectionId.HasValue)
             commissionsQ = commissionsQ.Where(c => c.SectionId == sectionId.Value);
-        if (examIds.Any() && (examId.HasValue || districtId.HasValue || !string.IsNullOrWhiteSpace(commissionNo)))
+        if (examIds.Any() && (examId.HasValue || buildingId.HasValue || !string.IsNullOrWhiteSpace(commissionNo)))
             commissionsQ = commissionsQ.Where(c => relatedCommissionNos.Contains(c.CommissionNo));
 
         var commissions = await commissionsQ
@@ -249,7 +274,7 @@ public class ExportController : ControllerBase
         // 3. Lazım olan sections
         var sectionIds = commissions.Select(c => c.SectionId).Distinct().ToList();
         var sectionsQ = _db.Sections.AsNoTracking().AsQueryable();
-        if (sectionId.HasValue || examId.HasValue || districtId.HasValue || !string.IsNullOrWhiteSpace(commissionNo))
+        if (sectionId.HasValue || examId.HasValue || buildingId.HasValue || !string.IsNullOrWhiteSpace(commissionNo))
             sectionsQ = sectionsQ.Where(s => sectionIds.Contains(s.Id));
 
         var sections = await sectionsQ
@@ -268,7 +293,7 @@ public class ExportController : ControllerBase
 
         // 5. Commission-exercises — scoring_rules-dan
         var rulesQ = _db.ScoringRules.AsNoTracking().Where(r => r.IsActive);
-        if (commissionNos.Any() && (examId.HasValue || sectionId.HasValue || districtId.HasValue || !string.IsNullOrWhiteSpace(commissionNo)))
+        if (commissionNos.Any() && (examId.HasValue || sectionId.HasValue || buildingId.HasValue || !string.IsNullOrWhiteSpace(commissionNo)))
             rulesQ = rulesQ.Where(r => commissionNos.Contains(r.CommissionNo));
 
         var rulePairs = await rulesQ
@@ -338,6 +363,23 @@ public class ExportController : ControllerBase
                 e.Id, e.Name, e.Surname, e.Fname, e.FinCode, e.SectionId, e.Gender))
             .ToListAsync(ct);
 
+        //10 photos
+        var studentIsNs = students.Select(s => s.IsN).Distinct().ToList();
+
+        var photoRows = await _db.Photos.AsNoTracking()
+            .Where(p => studentIsNs.Contains(p.IsN))
+            .OrderBy(p => p.IsN)
+            .Select(p => new { p.Id, p.IsN, p.Ad, p.Soyad, p.Ata, p.PhotoBase64 })
+            .ToListAsync(ct);
+
+        var photos = photoRows
+            .Select(p => new PhotoExportDto(
+                p.Id, p.IsN, p.Ad, p.Soyad, p.Ata,
+                p.PhotoBase64 == null ? null : Convert.ToBase64String(p.PhotoBase64)))
+            .ToList();
+
+
+
         return new SnapshotExportDto(
             ExportedAt: DateTime.UtcNow.ToString("o"),
             Source: "ResultsApp",
@@ -345,7 +387,7 @@ public class ExportController : ControllerBase
             {
                 ["examId"] = examId,
                 ["sectionId"] = sectionId,
-                ["districtId"] = districtId,
+                ["buildingId"] = buildingId,
                 ["from"] = from?.ToString("yyyy-MM-dd"),
                 ["to"] = to?.ToString("yyyy-MM-dd"),
                 ["commissionNo"] = commissionNo
@@ -358,6 +400,7 @@ public class ExportController : ControllerBase
             ExamCommissions: examCommissions,
             Students: students,
             Experts: experts,
-            ExamExpertSubprofessions: examExpertSubprofessions);
+            ExamExpertSubprofessions: examExpertSubprofessions,
+            Photos: photos);
     }
 }

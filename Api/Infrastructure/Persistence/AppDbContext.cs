@@ -13,6 +13,7 @@ public class AppDbContext : DbContext
     public DbSet<Exam> Exams => Set<Exam>();
     public DbSet<Section> Sections => Set<Section>();
     public DbSet<ExamBuilding> ExamBuildings => Set<ExamBuilding>();
+    public DbSet<ExamRooms> ExamRooms => Set<ExamRooms>();
     public DbSet<Commission> Commissions => Set<Commission>();
     public DbSet<ExamCommission> ExamCommissions => Set<ExamCommission>();
     public DbSet<Expert> Experts => Set<Expert>();
@@ -22,7 +23,11 @@ public class AppDbContext : DbContext
     public DbSet<ExamExpertSubprofessions> ExamExpertSubProfessions => Set<ExamExpertSubprofessions>();
     public DbSet<ExamMonitor> ExamMonitors => Set<ExamMonitor>();
     public DbSet<ExamRepresentative> ExamRepresentatives => Set<ExamRepresentative>();
-    public DbSet<Gender> Genders => Set<Gender>();
+    public DbSet<Gender> Genders => Set<Gender>(); 
+    public DbSet<SubProfession> SubProfessions => Set<SubProfession>();
+    public DbSet<District> Districts => Set<District>();
+    public DbSet<AppUser> AppUsers => Set<AppUser>();
+    public DbSet<Photo> Photos => Set<Photo>();
 
     // ── New (writable) ──
     public DbSet<Student> Students => Set<Student>();
@@ -34,7 +39,6 @@ public class AppDbContext : DbContext
     public DbSet<StudentAppealResult> StudentAppealResults => Set<StudentAppealResult>();
     // ── View (keyless) ──
     public DbSet<StudentTotalScoreView> StudentTotalScores => Set<StudentTotalScoreView>();
-    public DbSet<District> Districts => Set<District>();
     protected override void OnModelCreating(ModelBuilder b)
     {
         b.Entity<CommissionStageRule>(e =>
@@ -176,11 +180,17 @@ public class AppDbContext : DbContext
         b.Entity<ExamExpertSubprofessions>(e =>
         {
             e.ToTable("Exam_Expert_SubProfessions");
-            e.HasKey(x => new { x.ExamId, x.ExpertId });
-            e.Property(x => x.ExamId).HasColumnName("Exam_Id");       // ← eklendi
-            e.Property(x => x.ExpertId).HasColumnName("Expert_Id");   // ← eklendi
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Id).HasColumnName("Id");
+            e.Property(x => x.ExamId).HasColumnName("Exam_Id");
+            e.Property(x => x.ExpertId).HasColumnName("Expert_Id");
+            e.Property(x => x.SubProfessionId).HasColumnName("SubProfession_Id");  
+            e.Property(x => x.FederationId).HasColumnName("Federation_Id");        
+            e.Property(x => x.RoomId).HasColumnName("Room_Id");                    
+            e.Property(x => x.IsAttended).HasColumnName("IsAttended");             
             e.HasOne(x => x.Exam).WithMany(x => x.ExamExpertSubProfessions).HasForeignKey(x => x.ExamId);
             e.HasOne(x => x.Expert).WithMany().HasForeignKey(x => x.ExpertId);
+            e.HasOne(x => x.SubProfession).WithMany().HasForeignKey(x => x.SubProfessionId); 
         });
 
         b.Entity<ExamMonitor>(e =>
@@ -204,6 +214,27 @@ public class AppDbContext : DbContext
             e.ToTable("genders");
             e.Property(x => x.Id).HasColumnName("id");
             e.Property(x => x.Name).HasColumnName("name");
+        });
+        b.Entity<SubProfession>(e =>
+        {
+            e.ToTable("sub_professions");
+            e.Property(x => x.Id).HasColumnName("id");
+            e.Property(x => x.Name).HasColumnName("name");
+            e.Property(x => x.SectionId).HasColumnName("section_id");
+            e.Property(x => x.ProfessionId).HasColumnName("profession_id");
+        }); 
+        b.Entity<Photo>(e =>
+        {
+            e.ToTable("Photos");                 // synonym adı da "Photos" olduqda dəyişməz
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Id).HasColumnName("id").ValueGeneratedOnAdd();
+            e.Property(x => x.IsN).HasColumnName("is_n");
+            e.Property(x => x.Ad).HasColumnName("ad");
+            e.Property(x => x.Soyad).HasColumnName("soyad");
+            e.Property(x => x.Ata).HasColumnName("ata");
+            e.Property(x => x.PhotoBase64)
+    .HasColumnName("photo")
+    .HasColumnType("varbinary(max)");
         });
 
         // ─── NEW: writable tables ───────────────────────────────────────
@@ -328,6 +359,25 @@ public class AppDbContext : DbContext
             e.Property(x => x.TotalScore).HasColumnName("total_score");
             e.Property(x => x.IsPassed).HasColumnName("is_passed");
             e.Property(x => x.LastRecordedAt).HasColumnName("last_recorded_at");
+        });
+
+        b.Entity<ExamRooms>(e =>
+        {
+            e.ToTable("exam_rooms");
+            e.Property(x => x.Id).HasColumnName("id");
+            e.Property(x => x.Name).HasColumnName("name");
+            e.Property(x => x.SectionId).HasColumnName("section_id");
+        });
+
+        b.Entity<AppUser>(e =>
+        {
+            e.ToTable("AspNetUsers"); // synonym
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Id).HasColumnName("Id");
+            e.Property(x => x.UserName).HasColumnName("UserName");
+            e.Property(x => x.FirstName).HasColumnName("FirstName");
+            e.Property(x => x.LastName).HasColumnName("LastName");
+            e.Property(x => x.IsAdmin).HasColumnName("IsAdmin");
         });
     }
 }

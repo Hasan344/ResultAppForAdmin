@@ -26,8 +26,8 @@ public class LookupController : ControllerBase
 
     [HttpGet("exercises")]
     public async Task<IEnumerable<object>> Exercises(
-    [FromQuery] int? sectionId,          // ← YENİ
-    CancellationToken ct = default)
+        [FromQuery] int? sectionId,
+        CancellationToken ct = default)
     {
         var q = _db.Exercises.AsNoTracking().AsQueryable();
 
@@ -41,6 +41,7 @@ public class LookupController : ControllerBase
             .Select(e => new { e.Id, e.Code, e.Name, e.Unit, e.Direction, e.SectionId })
             .ToListAsync(ct);
     }
+
     /// <summary>
     /// Komissiya siyahısı.
     /// ?sectionId=N verilsə yalnız o bölmənin komissiyaları qaytarılır.
@@ -63,8 +64,29 @@ public class LookupController : ControllerBase
 
     [HttpGet("districts")]
     public async Task<IEnumerable<object>> Districts(CancellationToken ct) =>
-    await _db.Districts.AsNoTracking()
-        .OrderBy(d => d.Name)
-        .Select(d => new { d.Id, d.Name })
-        .ToListAsync(ct);
+        await _db.Districts.AsNoTracking()
+            .OrderBy(d => d.Name)
+            .Select(d => new { d.Id, d.Name })
+            .ToListAsync(ct);
+
+    /// <summary>
+    /// İmtahan binaları (exam_building).
+    /// ?sectionId=N verilsə yalnız o bölməyə aid binalar qaytarılır
+    /// (exam_building.section_id üzrə süzülür).
+    /// </summary>
+    [HttpGet("buildings")]
+    public async Task<IEnumerable<object>> Buildings(
+        [FromQuery] int? sectionId,
+        CancellationToken ct = default)
+    {
+        var q = _db.ExamBuildings.AsNoTracking().AsQueryable();
+
+        if (sectionId.HasValue)
+            q = q.Where(b => b.SectionId == sectionId.Value);
+
+        return await q
+            .OrderBy(b => b.Name)
+            .Select(b => new { b.Id, b.Name })
+            .ToListAsync(ct);
+    }
 }

@@ -7,48 +7,62 @@ namespace ResultAppForAdmin.Api.Application.Services;
 public interface IScoringService
 {
     Task<byte> CalculateAsync(
-        string commissionNo,
-        string? kodixtisas,
-        int exerciseId,
-        byte gender,
-        int ageInYears,
-        decimal? rawValue,
-        bool refused,
+        string commissionNo, string? kodixtisas, int exerciseId,
+        byte gender, int ageInYears, decimal? rawValue, bool refused,
         CancellationToken ct = default);
 
     int CalculateAge(DateOnly birthDate, DateOnly examDate);
 
-    // Yekun bal + keç/qal — komissiya stage rule-una (yoxdursa köhnə cəm eşiyinə) görə.
+    // Saxlanılan FinalScore-a görə (manual override-lar qorunur)
     Task<FinalScoreResult> CalculateFinalScoreAsync(
         int studentId, int examId, CancellationToken ct = default);
+
+    // RAW dəyəri verilən alt-ixtisasın (kodixtisas) normativinə görə YENİDƏN puanlayır.
+    // 62 kimi çox-alt-ixtisaslı komissiyalarda hər alt-ixtisas üçün ayrı nəticə almaq üçün.
+    Task<FinalScoreResult> CalculateFinalScoreAsync(
+        int studentId, int examId, string? kodixtisas, CancellationToken ct = default);
 }
 
 public class ScoringService : IScoringService
 {
     private readonly AppDbContext _db;
-
-    // Stage rule-u olmayan komissiyalar üçün köhnə (view) davranışı: cəm >= bu eşik.
     private const int LegacyPassThreshold = 24;
 
     public ScoringService(AppDbContext db) => _db = db;
 
+    // Aggregation üçün daxili sadə model (StudentExamResult və ya re-score eyni yola düşür)
+    private readonly record struct ScoredResult(string ExerciseCode, byte Score, bool IsRefused);
+
+    // ════════════════════════════════════════════════════════════════════════
+    // mm.ss FORMATLI HƏRƏKƏTLƏR
+    // Bu hərəkətlərdə raw_value DƏQİQƏ.SANİYƏ kimi gəlir: 4.07 = 4 dəq 07 san = 247 san.
+    // Saniyə hissəsi HƏMİŞƏ 2 rəqəmdir (4.7 GƏLMİR, yalnız 4.07).
+    // Yeni mesafeli koşu əlavə olunarsa (məs. cross_400m, cross_500m) onun code-unu
+    // BURAYA əlavə et — əks halda eyni hesablama xətası onda da olar.
+    // ════════════════════════════════════════════════════════════════════════
+    private static readonly HashSet<string> MmssExercises = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "cross_1000m",
+        "sprint_400m",
+    };
+
+    // mm.ss → ümumi saniyə. mm.ss olmayan hərəkətlər üçün dəyəri olduğu kimi qaytarır.
+    private static decimal NormalizeRaw(string code, decimal raw)
+    {
+        if (!MmssExercises.Contains(code)) return raw;
+
+        int minutes = (int)Math.Floor(raw);
+        int seconds = (int)Math.Round((raw - minutes) * 100m, MidpointRounding.AwayFromZero);
+        return minutes * 60 + seconds;
+    }
+
     // ════════════════════════════════════════════════════════════════════════
     // Tək normativ üçün xam dəyər → bal (6–10)
+    // imtina/null → 0 (yalnız HƏMİN hərəkətin balı sıfır olur)
     // ════════════════════════════════════════════════════════════════════════
-    /// <summary>
-    /// Returns 0 if refused, 0 if no threshold met, else 6–10.
-    /// Direction 1 (lower-better): rawValue &lt;= threshold → score
-    /// Direction 2 (higher-better): rawValue &gt;= threshold → score
-    /// Gymnastics/sport-games (no rules in DB): rawValue itself is the score.
-    /// </summary>
     public async Task<byte> CalculateAsync(
-        string commissionNo,
-        string? kodixtisas,
-        int exerciseId,
-        byte gender,
-        int ageInYears,
-        decimal? rawValue,
-        bool refused,
+        string commissionNo, string? kodixtisas, int exerciseId,
+        byte gender, int ageInYears, decimal? rawValue, bool refused,
         CancellationToken ct = default)
     {
         if (refused || rawValue is null) return 0;
@@ -57,19 +71,12 @@ public class ScoringService : IScoringService
             .FirstOrDefaultAsync(x => x.Id == exerciseId, ct)
             ?? throw new InvalidOperationException($"Exercise {exerciseId} not found");
 
-        // Subjective exercises (gymnastics, sport_games): rawValue is the score directly.
-        // These have no rows in scoring_rules.
-        // QEYD: "_total_xal" normativləri də (qılıncoynatma cəmi, II mərhələ ümumi xal)
-        // adətən Unit == "score" olur — yəni xam dəyər birbaşa baldır.
         if (exercise.Unit == "score")
-        {
-            var v = (byte)Math.Clamp((int)Math.Round(rawValue.Value), 0, 10);
-            return v;
-        }
+            return (byte)Math.Clamp((int)Math.Round(rawValue.Value), 0, 10);
 
-        // Find applicable rules; pick the BEST score whose threshold is met.
-        // Filter on kodixtisas: rule.Kodixtisas == null  → applies to all
-        //                       rule.Kodixtisas == student → applies to that subspecialty
+        // mm.ss formatlı hərəkətlərdə əvvəlcə saniyəyə çevir (4.07 → 247)
+        decimal value = NormalizeRaw(exercise.Code, rawValue.Value);
+
         var rules = await _db.ScoringRules.AsNoTracking()
             .Where(r => r.CommissionNo == commissionNo
                      && (r.Kodixtisas == null || r.Kodixtisas == kodixtisas)
@@ -78,7 +85,7 @@ public class ScoringService : IScoringService
                      && r.AgeMin <= ageInYears
                      && r.AgeMax >= ageInYears
                      && r.IsActive)
-            .OrderByDescending(r => r.Score)         // try 10 first, then 9, ...
+            .OrderByDescending(r => r.Score)
             .ToListAsync(ct);
 
         if (rules.Count == 0) return 0;
@@ -86,31 +93,24 @@ public class ScoringService : IScoringService
         foreach (var rule in rules)
         {
             bool meets = exercise.Direction == 1
-                ? rawValue.Value <= rule.Threshold   // saniyə
-                : rawValue.Value >= rule.Threshold;  // sm, dəfə
+                ? value <= rule.Threshold     // saniyə: kiçik = yaxşı
+                : value >= rule.Threshold;    // sm/dəfə: böyük = yaxşı
             if (meets) return rule.Score;
         }
         return 0;
     }
 
-    /// <summary>
-    /// Year-based age difference, accounting for whether birthday has passed.
-    /// Aligned with how Azerbaijani sport competitions calculate age (full years).
-    /// </summary>
     public int CalculateAge(DateOnly birthDate, DateOnly examDate)
-    => examDate.Year - birthDate.Year;
+        => examDate.Year - birthDate.Year;
+
     // ════════════════════════════════════════════════════════════════════════
-    // YEKUN bal — komissiyanın FinalMethod-una görə
-    // Apellyasiya balı (varsa) orijinal balı/imtinanı override edir.
-    // Stage rule yoxdursa köhnə (view) davranışına — sadə cəm >= eşik — düşür.
+    // YEKUN bal — saxlanılan FinalScore (manual override-lar daxil)
     // ════════════════════════════════════════════════════════════════════════
     public async Task<FinalScoreResult> CalculateFinalScoreAsync(
         int studentId, int examId, CancellationToken ct = default)
     {
-        var student = await _db.Students.AsNoTracking()
-            .FirstAsync(s => s.Id == studentId, ct);
+        var student = await _db.Students.AsNoTracking().FirstAsync(s => s.Id == studentId, ct);
 
-        // Bu tələbə üçün bütün nəticələr
         var results = await _db.StudentExamResults.AsNoTracking()
             .Include(r => r.Exercise)
             .Where(r => r.StudentId == studentId)
@@ -119,169 +119,155 @@ public class ScoringService : IScoringService
         if (results.Count == 0)
             return new FinalScoreResult(null, "Nəticə yoxdur", false);
 
-        // ── Apellyasiya override: appeal varsa orijinal balı (və imtinanı) əvəz edir ──
         var appeals = await _db.StudentAppealResults.AsNoTracking()
             .Where(a => a.StudentId == studentId)
             .ToDictionaryAsync(a => a.ExerciseId, a => a.AppealScore, ct);
 
-        if (appeals.Count > 0)
-            foreach (var r in results)
-                if (appeals.TryGetValue(r.ExerciseId, out var appealScore))
-                {
-                    r.FinalScore = appealScore;   // əsas bal artıq apellyasiya balıdır
-                    r.IsRefused = false;         // apellyasiya imtinanı da ləğv edir
-                }
+        var scored = results.Select(r =>
+        {
+            byte score = r.FinalScore;
+            bool refused = r.IsRefused;
+            if (appeals.TryGetValue(r.ExerciseId, out var ap)) { score = ap; refused = false; }
+            return new ScoredResult(r.Exercise.Code, score, refused);
+        }).ToList();
 
         var rule = await _db.Set<CommissionStageRule>().AsNoTracking()
             .FirstOrDefaultAsync(r => r.CommissionNo == student.CommissionNo, ct);
 
-        // ── Stage rule yoxdursa: köhnə (view) davranışı — sadə cəm eşiyi ──
-        // (məs. komissiya 63 — fərdi normativlərin cəmi >= 24)
-        if (rule is null)
-        {
-            if (results.Any(r => r.IsRefused))
-                return new FinalScoreResult(0, "Normativdə imtina", false);
+        return Aggregate(scored, rule);
+    }
 
-            int total = results.Sum(r => r.FinalScore);
-            bool passed = total >= LegacyPassThreshold;
-            return new FinalScoreResult(
-                (byte)Math.Clamp(total, 0, 255),
-                passed ? null : $"Cəm {total} < {LegacyPassThreshold}",
-                passed);
+    // ════════════════════════════════════════════════════════════════════════
+    // YEKUN bal — RAW dəyəri verilən kodixtisas-a görə YENİDƏN hesablayır
+    // (çox-alt-ixtisaslı komissiyalar üçün; manual override-ları NƏZƏRƏ ALMIR — aşağı qeydə bax)
+    // ════════════════════════════════════════════════════════════════════════
+    public async Task<FinalScoreResult> CalculateFinalScoreAsync(
+        int studentId, int examId, string? kodixtisas, CancellationToken ct = default)
+    {
+        var student = await _db.Students.AsNoTracking().FirstAsync(s => s.Id == studentId, ct);
+        var exam = await _db.Exams.AsNoTracking().FirstAsync(e => e.Id == examId, ct);
+        int age = student.BirthDate is null ? 0 : CalculateAge(student.BirthDate.Value, exam.ExamDate);
+
+        var results = await _db.StudentExamResults.AsNoTracking()
+            .Include(r => r.Exercise)
+            .Where(r => r.StudentId == studentId)
+            .ToListAsync(ct);
+
+        if (results.Count == 0)
+            return new FinalScoreResult(null, "Nəticə yoxdur", false);
+
+        var appeals = await _db.StudentAppealResults.AsNoTracking()
+            .Where(a => a.StudentId == studentId)
+            .ToDictionaryAsync(a => a.ExerciseId, a => a.AppealScore, ct);
+
+        var scored = new List<ScoredResult>(results.Count);
+        foreach (var r in results)
+        {
+            byte score;
+            bool refused = r.IsRefused;
+            if (appeals.TryGetValue(r.ExerciseId, out var ap))
+            {
+                score = ap; refused = false;            // apellyasiya balı (alt-ixtisasdan asılı deyil)
+            }
+            else
+            {
+                score = await CalculateAsync(
+                    student.CommissionNo, kodixtisas, r.ExerciseId,
+                    student.Gender, age, r.RawValue, r.IsRefused, ct);
+            }
+            scored.Add(new ScoredResult(r.Exercise.Code, score, refused));
         }
 
-        // I mərhələ və II/ümumi xal ayrılması:
-        // Konvensiya: exercise.code "_total_xal" ilə bitirsə → ümumi xal (stage2);
-        // əks halda I mərhələ (stage1).
-        var stage1 = results.Where(r => !r.Exercise.Code.EndsWith("_total_xal")).ToList();
-        var totalXal = results.Where(r => r.Exercise.Code.EndsWith("_total_xal")).ToList();
+        var rule = await _db.Set<CommissionStageRule>().AsNoTracking()
+            .FirstOrDefaultAsync(r => r.CommissionNo == student.CommissionNo, ct);
 
-        // İmtina edənlər (refuse) avtomatik qeyri-məqbul
-        if (results.Any(r => r.IsRefused))
-            return new FinalScoreResult(0, "Bir və ya bir neçə normativdə imtina", false);
+        return Aggregate(scored, rule);
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    // Ortaq aggregation
+    //
+    // QEYD: İmtina yekun nəticəni avtomatik "qeyri-məqbul" ETMİR. İmtina yalnız
+    // həmin hərəkətin balını 0 edir; 0 normal qaydada cəmə/ortalamaya daxil olur.
+    // ════════════════════════════════════════════════════════════════════════
+    private static FinalScoreResult Aggregate(List<ScoredResult> scored, CommissionStageRule? rule)
+    {
+        if (rule is null)
+        {
+            int total = scored.Sum(r => r.Score);
+            bool passed = total >= LegacyPassThreshold;
+            return new FinalScoreResult((byte)Math.Clamp(total, 0, 255),
+                passed ? null : $"Cəm {total} < {LegacyPassThreshold}", passed);
+        }
+
+        var stage1 = scored.Where(r => !r.ExerciseCode.EndsWith("_total_xal")).ToList();
+        var totalXal = scored.Where(r => r.ExerciseCode.EndsWith("_total_xal")).ToList();
 
         return rule.FinalMethod switch
         {
             "single" => HandleSingle(stage1, rule),
             "avg" => HandleAvg(stage1, rule),
-
-            // ── Ümumi xal: girişi həmişə eyni tipdir (bir "_total_xal" normativi),
-            //    yalnız komissiyaya görə dəyişir. Hamısı tək handler-ə yönəlir. ──
-            "sum"
-              or "total_xal"
-              or "stage2_total_xal" => HandleTotalXal(stage1, totalXal, rule),
-
+            "sum" or "total_xal" or "stage2_total_xal" => HandleTotalXal(stage1, totalXal, rule),
             "stage2_avg" => HandleStage2Avg(stage1, totalXal, rule),
             "chained_avg" => HandleChainedAvg(stage1, totalXal, rule),
-
             _ => new FinalScoreResult(null, $"Bilinməyən metod: {rule.FinalMethod}", false)
         };
     }
 
-    // ════════════════════════════════════════════════════════════════════════
-    // Ortaq köməkçi: I mərhələ minimum gate (data-driven)
-    // ════════════════════════════════════════════════════════════════════════
-    /// <summary>
-    /// I mərhələ minimum tələbini yoxlayır. Keçərsə <c>null</c> qaytarır,
-    /// keçməzsə uğursuz <see cref="FinalScoreResult"/> qaytarır.
-    /// Komissiyaya görə dəyişən hər şey (Stage1Required / Stage1Total / MinimumScore)
-    /// data-dadır — bu metod heç bir komissiyanı hardcode etmir.
-    /// </summary>
-    private static FinalScoreResult? Stage1Gate(
-        List<StudentExamResult> stage1, CommissionStageRule rule)
+    private static FinalScoreResult? Stage1Gate(List<ScoredResult> stage1, CommissionStageRule rule)
     {
-        if (rule.Stage1Required <= 0 || stage1.Count == 0)
-            return null;
-
-        int meetingMin = stage1.Count(r => r.FinalScore >= rule.MinimumScore);
+        if (rule.Stage1Required <= 0 || stage1.Count == 0) return null;
+        int meetingMin = stage1.Count(r => r.Score >= rule.MinimumScore);
         if (meetingMin < rule.Stage1Required)
             return new FinalScoreResult(0,
                 $"I mərhələ tələbi: {rule.Stage1Required}/{rule.Stage1Total} " +
-                $"≥{rule.MinimumScore}; faktiki: {meetingMin}",
-                false);
-
+                $"≥{rule.MinimumScore}; faktiki: {meetingMin}", false);
         return null;
     }
 
-    // ── single: tək normativ birbaşa bal verir ──────────────────────────────
-    private static FinalScoreResult HandleSingle(
-        List<StudentExamResult> s1, CommissionStageRule rule)
+    private static FinalScoreResult HandleSingle(List<ScoredResult> s1, CommissionStageRule rule)
     {
         if (s1.Count == 0) return new(null, "Normativ yoxdur", false);
-        var score = s1.First().FinalScore;
+        var score = s1.First().Score;
         var passed = score >= rule.MinimumScore;
         return new(score, passed ? null : $"Bal < {rule.MinimumScore}", passed);
     }
 
-    // ── avg: I mərhələ normativlərinin ortası ───────────────────────────────
-    private static FinalScoreResult HandleAvg(
-        List<StudentExamResult> s1, CommissionStageRule rule)
+    private static FinalScoreResult HandleAvg(List<ScoredResult> s1, CommissionStageRule rule)
     {
         if (s1.Count == 0) return new(null, "Normativ yoxdur", false);
-
         if (Stage1Gate(s1, rule) is { } gateFail) return gateFail;
-
-        var avg = (byte)Math.Round(
-            s1.Average(r => (decimal)r.FinalScore), MidpointRounding.AwayFromZero);
+        var avg = (byte)Math.Round(s1.Average(r => (decimal)r.Score), MidpointRounding.AwayFromZero);
         return new(avg, null, avg >= rule.MinimumScore);
     }
 
-    // ════════════════════════════════════════════════════════════════════════
-    // ÜMUMİ XAL — birləşdirilmiş handler
-    // Əvvəlki HandleSum (qılıncoynatma) + HandleStage2Only (II mərhələ ümumi xal)
-    // burada birləşir.
-    // Hər ikisinin məntiqi eynidir:
-    //   1) (varsa) I mərhələ minimum gate
-    //   2) "_total_xal" normativinin FinalScore-u (artıq lookup ilə hesablanıb)
-    //   3) >= MinimumScore → məqbul
-    // ════════════════════════════════════════════════════════════════════════
     private static FinalScoreResult HandleTotalXal(
-        List<StudentExamResult> stage1,
-        List<StudentExamResult> totalXal,
-        CommissionStageRule rule)
+        List<ScoredResult> stage1, List<ScoredResult> totalXal, CommissionStageRule rule)
     {
         if (Stage1Gate(stage1, rule) is { } gateFail) return gateFail;
-
-        if (totalXal.Count == 0)
-            return new(null, "Ümumi xal nəticəsi hələ yoxdur", false);
-
-        // Adətən tək "_total_xal" sətri olur; bir neçə olsa ən yüksəyini götürürük.
-        var score = totalXal.Max(r => r.FinalScore);
+        if (totalXal.Count == 0) return new(null, "Ümumi xal nəticəsi hələ yoxdur", false);
+        var score = totalXal.Max(r => r.Score);
         return new(score, null, score >= rule.MinimumScore);
     }
 
-    // ── stage2_avg: II mərhələ normativlərinin ortası ───────────────────────
     private static FinalScoreResult HandleStage2Avg(
-        List<StudentExamResult> s1, List<StudentExamResult> s2, CommissionStageRule rule)
+        List<ScoredResult> s1, List<ScoredResult> s2, CommissionStageRule rule)
     {
         if (Stage1Gate(s1, rule) is { } gateFail) return gateFail;
-
         if (s2.Count == 0) return new(null, "II mərhələ nəticəsi yoxdur", false);
-
-        var avg = (byte)Math.Round(
-            s2.Average(r => (decimal)r.FinalScore), MidpointRounding.AwayFromZero);
+        var avg = (byte)Math.Round(s2.Average(r => (decimal)r.Score), MidpointRounding.AwayFromZero);
         return new(avg, null, avg >= rule.MinimumScore);
     }
 
-    // ── chained_avg: 1-ci normativ ≥ minimum olarsa S1+S2 ortası ────────────
     private static FinalScoreResult HandleChainedAvg(
-        List<StudentExamResult> s1, List<StudentExamResult> s2, CommissionStageRule rule)
+        List<ScoredResult> s1, List<ScoredResult> s2, CommissionStageRule rule)
     {
         if (s1.Count == 0) return new(null, "Birinci normativ yoxdur", false);
-
-        // 1-ci normativ minimumu yoxla (bu gate digərlərindən fərqlidir:
-        // yalnız İLK normativə baxır, sayğaca yox).
-        if (s1[0].FinalScore < rule.MinimumScore)
-            return new(0,
-                $"1-ci normativ < {rule.MinimumScore} → 2-ci normativə buraxılmır",
-                false);
-
-        if (s2.Count == 0)
-            return new(null, "2-ci normativ hələ yoxdur", false);
-
+        if (s1[0].Score < rule.MinimumScore)
+            return new(0, $"1-ci normativ < {rule.MinimumScore} → 2-ci normativə buraxılmır", false);
+        if (s2.Count == 0) return new(null, "2-ci normativ hələ yoxdur", false);
         var all = s1.Concat(s2).ToList();
-        var avg = (byte)Math.Round(
-            all.Average(r => (decimal)r.FinalScore), MidpointRounding.AwayFromZero);
+        var avg = (byte)Math.Round(all.Average(r => (decimal)r.Score), MidpointRounding.AwayFromZero);
         return new(avg, null, avg >= rule.MinimumScore);
     }
 }

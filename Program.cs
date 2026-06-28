@@ -15,8 +15,8 @@ builder.Services.AddDbContext<AppDbContext>(opt =>
 // ─── Services ────────────────────
 builder.Services.AddScoped<IScoringService, ScoringService>();
 builder.Services.AddScoped<IImportService, ImportService>();
-builder.Services.AddScoped<IResultsService, ResultsService>(); 
-builder.Services.AddScoped<IResultsImportService, ResultsImportService>(); 
+builder.Services.AddScoped<IResultsService, ResultsService>();
+builder.Services.AddScoped<IResultsImportService, ResultsImportService>();
 builder.Services.AddScoped<IResultFileExportService, ResultFileExportService>();
 
 // ─── Controllers ─────────────────
@@ -38,9 +38,7 @@ builder.Services.AddCors(opt => opt.AddDefaultPolicy(p => p
     .AllowAnyMethod()));
 
 builder.Services.AddProblemDetails();
-
 var app = builder.Build();
-
 
 if (app.Environment.IsDevelopment())
 {
@@ -48,35 +46,26 @@ if (app.Environment.IsDevelopment())
     app.UseSwaggerUI();
 }
 
-
-app.UseDefaultFiles();  
-app.UseStaticFiles();   
+app.UseDefaultFiles();
+app.UseStaticFiles();
 
 app.UseExceptionHandler(errApp => errApp.Run(async ctx =>
 {
     var ex = ctx.Features.Get<IExceptionHandlerFeature>()?.Error;
     var isDev = app.Environment.IsDevelopment();
-
     ctx.Response.ContentType = "application/json";
     ctx.Response.StatusCode = ex is InvalidOperationException ? 400 : 500;
-
     var problem = new
     {
         error = ex?.Message ?? "Server xətası",
         detail = isDev ? ex?.ToString() : ex?.InnerException?.Message,
         type = isDev ? ex?.GetType().FullName : null
     };
-
     await ctx.Response.WriteAsJsonAsync(problem);
 }));
-
 app.UseStatusCodePages();
 app.UseCors();
 app.UseAuthorization();
-
 app.MapControllers();
-
-
 app.MapFallbackToFile("index.html");
-
 app.Run();

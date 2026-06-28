@@ -26,6 +26,7 @@ public class Exam
     public ICollection<ExamExpert> ExamExperts { get; set; } = new List<ExamExpert>();
     public ICollection<ExamExpertSubprofessions> ExamExpertSubProfessions { get; set; } = new List<ExamExpertSubprofessions>();
     public ICollection<ExamMonitor> ExamMonitors { get; set; } = new List<ExamMonitor>();
+    public ICollection<ExamRooms> ExamRooms { get; set; } = new List<ExamRooms>();
     public ICollection<ExamRepresentative> ExamRepresentatives { get; set; } = new List<ExamRepresentative>();
 }
 
@@ -124,8 +125,14 @@ public class ExamExpertSubprofessions
     public int Id { get; set; }
     public int ExamId { get; set; }
     public int ExpertId { get; set; }
+    public int? SubProfessionId { get; set; }  
+    public int? FederationId { get; set; }     
+    public int? RoomId { get; set; }           
+    public int? IsAttended { get; set; }       
+
     public Exam Exam { get; set; } = null!;
     public Expert Expert { get; set; } = null!;
+    public SubProfession? SubProfession { get; set; }  
 }
 
 public class ExamMonitor
@@ -151,4 +158,40 @@ public class Gender
 {
     public byte Id { get; set; }                         // 1=kişi, 2=qadın
     public string Name { get; set; } = null!;
+}
+public class ExamRooms
+{
+    public int Id { get; set; }
+    public string Name { get; set; } = null!;
+    public int SectionId { get; set; }
+    public virtual Section? Section { get; set; }
+    public virtual ICollection<ExamExpertSubprofessions> ExamExpertSubProfessions { get; set; } = new List<ExamExpertSubprofessions>();
+    public virtual ICollection<ExamMonitor> ExamMonitors { get; set; } = new List<ExamMonitor>();
+}
+public class SubProfession
+{
+    public int Id { get; set; }
+    public string Name { get; set; } = null!;
+    public int? SectionId { get; set; }
+    public int? ProfessionId { get; set; }
+}
+
+public class AppUser
+{
+    public string Id { get; set; } = default!;
+    public string? UserName { get; set; }
+    public string? NormalizedUserName { get; set; }
+    public string? PasswordHash { get; set; }
+    public string? FirstName { get; set; }
+    public string? LastName { get; set; }
+    public bool IsAdmin { get; set; }
+}
+public class Photo
+{
+    public int Id { get; set; }
+    public string IsN { get; set; }            // ⚠ Student.IsN ilə eyni CLR tipi olmalıdır
+    public string? Ad { get; set; }
+    public string? Soyad { get; set; }
+    public string? Ata { get; set; }
+    public byte[]? PhotoBase64 { get; set; } // → "photo" sütunu (base64)
 }

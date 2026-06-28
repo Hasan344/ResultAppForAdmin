@@ -3,8 +3,8 @@ import { useParams, Link } from "react-router-dom";
 import {
     ArrowLeft, Info, UserCheck, Eye, Users2, Building2,
     Layers, Clock, CalendarDays, Sun, Hash,
-    CheckCircle2, Circle, Crown, HeartHandshake, Briefcase,
-    ClipboardList, Scale, Save, X, ChevronDown, ChevronRight, Download, Loader2
+    Crown, HeartHandshake, Briefcase,
+    ClipboardList, Scale, Save, X, ChevronDown, ChevronRight, Download, Loader2, Search
 } from "lucide-react";
 import type { ReactNode } from "react";
 import { api } from "../../api/client";
@@ -17,7 +17,8 @@ import type {
 } from "../../types";
 import { MONITOR_ROLE, MONITOR_ROLE_LABELS } from "../../types";
 import { LoadingState, EmptyState } from "../../components/ui";
-import { formatDate, genderLabel } from "../../lib/format";
+import { formatDate } from "../../lib/format";
+import { StudentRow } from "./StudentSubProfessionBreakdown";
 
 type Tab = "info" | "experts" | "monitors" | "representatives" | "students" | "appeals";
 
@@ -85,11 +86,15 @@ export default function ExamDetail() {
     async function downloadResultFile() {
         setDownloading(true);
         try {
-            const r = await api.get(`/exams/${examId}/result-file`, { responseType: "blob" });
+            const r = await api.get(`/exams/${examId}/result-file/split`, {
+                responseType: "blob",
+            });
+            const ct = (r.headers["content-type"] as string) ?? "";
+            const isZip = ct.includes("zip");
             const url = URL.createObjectURL(r.data as Blob);
             const a = document.createElement("a");
             a.href = url;
-            a.download = `netice_exam${examId}.xlsx`;
+            a.download = isZip ? `netice_exam${examId}.zip` : `netice_exam${examId}.xlsx`;
             a.click();
             URL.revokeObjectURL(url);
         } catch (err) {
@@ -195,7 +200,7 @@ export default function ExamDetail() {
                 <div className="p-6">
                     {tab === "info" && <InfoTab exam={exam} />}
 
-                    {/* MONITORS — rol bazlı */}
+                    {/* MONITORS — rol bazlı + məntəqə */}
                     {tab === "monitors" && (
                         <>
                             <MonitorRoleSubTabs exam={exam} value={monitorRole} onChange={setMonitorRole} />
@@ -203,6 +208,7 @@ export default function ExamDetail() {
                                 <PeopleTable
                                     rows={tabData as ExamMonitor[]}
                                     showRole={monitorRole === "all"}
+                                    showRoom
                                     emptyLabel={
                                         monitorRole === "all"
                                             ? "Nəzarətçi tapılmadı"
@@ -213,7 +219,7 @@ export default function ExamDetail() {
                         </>
                     )}
 
-                    {/* REPRESENTATIVES — yeni tab */}
+                    {/* REPRESENTATIVES */}
                     {tab === "representatives" && (
                         tabLoading ? <LoadingState /> : (
                             <PeopleTable
@@ -223,17 +229,19 @@ export default function ExamDetail() {
                         )
                     )}
 
-                    {/* EXPERTS */}
+                    {/* EXPERTS — ixtisas (alt-ixtisas) + məntəqə */}
                     {tab === "experts" && (
                         tabLoading ? <LoadingState /> : (
                             <PeopleTable
                                 rows={tabData as Record<string, unknown>[]}
+                                showProfession
+                                showRoom
                                 emptyLabel="Ekspert tapılmadı"
                             />
                         )
                     )}
 
-                    {/* STUDENTS */}
+                    {/* STUDENTS — filtr + sətir içi nəticələr */}
                     {tab === "students" && (
                         tabLoading ? <LoadingState /> : (
                             <StudentsTable rows={tabData as Student[]} />
@@ -329,9 +337,16 @@ function MonitorRoleSubTabs({
 }
 
 // ── People Table (experts, monitors, representatives) ─────────────────────────
+// Görev 1: showProfession → İxtisas (alt-ixtisas), showRoom → Məntəqə sütunu
 function PeopleTable({
-    rows, showRole = false, emptyLabel
-}: { rows: Record<string, unknown>[]; showRole?: boolean; emptyLabel: string }) {
+    rows, showRole = false, showProfession = false, showRoom = false, emptyLabel
+}: {
+    rows: Record<string, unknown>[];
+    showRole?: boolean;
+    showProfession?: boolean;
+    showRoom?: boolean;
+    emptyLabel: string;
+}) {
     if (rows.length === 0) {
         return <EmptyState icon={<Users2 className="w-7 h-7" />} title={emptyLabel} />;
     }
@@ -341,6 +356,8 @@ function PeopleTable({
                 <thead>
                     <tr>
                         <th>Soyad</th><th>Ad</th><th>Ata adı</th><th>FİN</th>
+                        {showProfession && <th>İxtisas</th>}
+                        {showRoom && <th>Məntəqə</th>}
                         {showRole && <th>Rol</th>}
                     </tr>
                 </thead>
@@ -351,6 +368,20 @@ function PeopleTable({
                             <td>{String(r.name ?? "")}</td>
                             <td className="text-slate-600">{String(r.fname ?? "")}</td>
                             <td className="font-mono text-xs text-slate-500">{String(r.finCode ?? "")}</td>
+                            {showProfession && (
+                                <td className="text-slate-700">
+                                    {r.subProfession
+                                        ? String(r.subProfession)
+                                        : r.profession ? String(r.profession) : "—"}
+                                </td>
+                            )}
+                            {showRoom && (
+                                <td className="text-slate-700">
+                                    {r.roomName
+                                        ? String(r.roomName)
+                                        : (r.roomId ? `#${String(r.roomId)}` : "—")}
+                                </td>
+                            )}
                             {showRole && (
                                 <td>
                                     {typeof r.role === "number" ? (
@@ -369,65 +400,64 @@ function PeopleTable({
     );
 }
 
-// ── Students Table ────────────────────────────────────────────────────────────
+// ── Students Table (ad/soyad filtri + açılabilir nəticələr) ───────────────────
+// StudentRow ./StudentSubProfessionBreakdown-dan gəlir:
+//   alt-ixtisaslı (62) → 3 alt-ixtisas bal kırılımı
+//   digər tələbələr     → standart nəticə chip-ləri
 function StudentsTable({ rows }: { rows: Student[] }) {
-    if (rows.length === 0) {
-        return (
-            <EmptyState
-                icon={<Users2 className="w-7 h-7" />}
-                title="Tələbə yoxdur"
-                description="Bu imtahana hələ tələbə import edilməyib."
-            />
-        );
-    }
+    const [query, setQuery] = useState("");
+    const q = query.trim().toLowerCase();
+    const filtered = q
+        ? rows.filter((s) => {
+            const full = `${s.surname ?? ""} ${s.name ?? ""} ${s.fatherName ?? ""}`.toLowerCase();
+            return full.includes(q) || String(s.isN ?? "").toLowerCase().includes(q);
+        })
+        : rows;
+
     return (
-        <div className="overflow-x-auto -mx-6 lg:-mx-0 rounded-xl border border-slate-100">
-            <table className="table-modern">
-                <thead>
-                    <tr>
-                        <th>Qrup</th><th>№</th><th>İş №</th><th>Tələbə</th>
-                        <th>Cins</th><th>İxtisas</th><th>İştirak</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {rows.map((s) => (
-                        <tr key={s.id}>
-                            <td className="tabular-nums font-medium">{s.qrupNum}</td>
-                            <td className="tabular-nums text-slate-500">{s.sNomer ?? "—"}</td>
-                            <td className="tabular-nums font-mono text-xs text-slate-500">{s.isN}</td>
-                            <td className="font-medium text-slate-900">
-                                {s.surname} {s.name}{" "}
-                                <span className="text-slate-500 font-normal">{s.fatherName}</span>
-                            </td>
-                            <td>{genderLabel(s.gender)}</td>
-                            <td>
-                                <div className="text-slate-700">{s.ixtisasName}</div>
-                                <div className="text-xs text-slate-500 font-mono">
-                                    {s.kodixtisas}{s.altNov ? ` · ${s.altNov}` : ""}
-                                </div>
-                            </td>
-                            <td>
-                                {s.isAttended ? (
-                                    <span className="badge-success">
-                                        <CheckCircle2 className="w-3.5 h-3.5" />İştirak etdi
-                                    </span>
-                                ) : (
-                                    <span className="badge-neutral">
-                                        <Circle className="w-3.5 h-3.5" />Qeyd yox
-                                    </span>
-                                )}
-                            </td>
-                        </tr>
-                    ))}
-                </tbody>
-            </table>
+        <div>
+            {/* Ad / soyad / iş № axtarışı */}
+            <div className="relative max-w-xs mb-4">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                <input
+                    value={query}
+                    onChange={(e) => setQuery(e.target.value)}
+                    placeholder="Ad, soyad və ya iş №…"
+                    className="input pl-9"
+                />
+            </div>
+
+            {filtered.length === 0 ? (
+                <EmptyState
+                    icon={<Users2 className="w-7 h-7" />}
+                    title={rows.length === 0 ? "Tələbə yoxdur" : "Nəticə tapılmadı"}
+                    description={rows.length === 0
+                        ? "Bu imtahana hələ tələbə import edilməyib."
+                        : "Axtarışa uyğun tələbə tapılmadı."}
+                />
+            ) : (
+                <div className="overflow-x-auto -mx-6 lg:-mx-0 rounded-xl border border-slate-100">
+                    <table className="table-modern">
+                        <thead>
+                            <tr>
+                                <th className="w-8" />
+                                <th>Qrup</th><th>№</th><th>İş №</th><th>Tələbə</th>
+                                <th>Cins</th><th>İxtisas</th><th>İştirak</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {filtered.map((s) => <StudentRow key={s.id} s={s} />)}
+                        </tbody>
+                    </table>
+                </div>
+            )}
         </div>
     );
 }
 
 // ── Appeal Tab ────────────────────────────────────────────────────────────────
 function AppealTab({
-     commissionNos, commissionFilter, onCommissionFilter,
+    commissionNos, commissionFilter, onCommissionFilter,
     data, loading, onUpdated
 }: {
     examId: number;
@@ -617,19 +647,19 @@ function AppealExerciseRow({
                 )}
             </div>
 
-            {/* Apellyasiya nəticəsi */}
+            {/* Apellyasiya nəticə */}
             <div className="text-center min-w-[80px]">
                 <div className="text-xs text-slate-500 mb-0.5">Apellyasiya</div>
                 {appeal ? (
                     <div>
                         <div className={`font-bold tabular-nums text-lg ${appeal.appealScore > (original?.finalScore ?? 0) ? "text-emerald-700" :
-                                appeal.appealScore < (original?.finalScore ?? 0) ? "text-rose-700" : "text-slate-700"
+                            appeal.appealScore < (original?.finalScore ?? 0) ? "text-rose-700" : "text-slate-700"
                             }`}>
                             {appeal.appealScore}
                         </div>
                         <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${appeal.decision === "dəyişdi"
-                                ? "bg-emerald-100 text-emerald-700"
-                                : "bg-slate-100 text-slate-600"
+                            ? "bg-emerald-100 text-emerald-700"
+                            : "bg-slate-100 text-slate-600"
                             }`}>
                             {appeal.decision === "dəyişdi" ? "Dəyişdi" : "Dəyişmədi"}
                         </span>
@@ -639,7 +669,7 @@ function AppealExerciseRow({
                 )}
             </div>
 
-            {/* Qeyd */}
+            {/* Qeyd (oxunaqlı) */}
             <div className="flex-1 min-w-[120px]">
                 {appeal?.notes && (
                     <div className="text-xs text-slate-600 italic">{appeal.notes}</div>
@@ -649,87 +679,56 @@ function AppealExerciseRow({
             {/* Əməliyyatlar */}
             <div className="flex items-center gap-2">
                 {!editing ? (
-                    <button
-                        onClick={() => setEditing(true)}
-                        className="btn-secondary !px-3 !py-1.5 !text-xs"
-                    >
+                    <button onClick={() => setEditing(true)} className="btn-secondary !px-3 !py-1.5 !text-xs">
                         {appeal ? "Düzəliş" : "Daxil et"}
                     </button>
                 ) : (
                     <div className="flex items-center gap-2 flex-wrap">
-                        {/* Raw value */}
                         <div>
                             <label className="block text-[10px] text-slate-500 mb-0.5">Xam dəyər</label>
                             <input
-                                type="number"
-                                step="0.01"
-                                value={raw}
+                                type="number" step="0.01" value={raw}
                                 onChange={(e) => setRaw(e.target.value)}
-                                placeholder="opsional"
-                                className="input !w-24 !py-1 !text-xs"
+                                placeholder="opsional" className="input !w-24 !py-1 !text-xs"
                             />
                         </div>
-                        {/* Bal */}
                         <div>
                             <label className="block text-[10px] text-slate-500 mb-0.5">Bal (0-10)</label>
                             <input
-                                ref={inputRef}
-                                type="number"
-                                min={0} max={10}
-                                value={score}
+                                ref={inputRef} type="number" min={0} max={10} value={score}
                                 onChange={(e) => setScore(e.target.value)}
                                 className="input !w-16 !py-1 !text-xs"
                             />
                         </div>
-                        {/* Qərar */}
                         <div>
                             <label className="block text-[10px] text-slate-500 mb-0.5">Qərar</label>
                             <select
-                                value={decision}
-                                onChange={(e) => setDecision(e.target.value)}
+                                value={decision} onChange={(e) => setDecision(e.target.value)}
                                 className="input !py-1 !text-xs !w-28"
                             >
                                 <option value="dəyişdi">Dəyişdi</option>
                                 <option value="dəyişmədi">Dəyişmədi</option>
                             </select>
                         </div>
-                        {/* Qeyd */}
                         <div>
                             <label className="block text-[10px] text-slate-500 mb-0.5">Qeyd</label>
                             <input
-                                type="text"
-                                value={notes}
-                                onChange={(e) => setNotes(e.target.value)}
-                                placeholder="opsional"
-                                className="input !py-1 !text-xs !w-36"
+                                type="text" value={notes} onChange={(e) => setNotes(e.target.value)}
+                                placeholder="opsional" className="input !py-1 !text-xs !w-36"
                             />
                         </div>
-                        {/* Save/Cancel */}
                         <div className="flex gap-1 self-end pb-px">
-                            <button
-                                onClick={save}
-                                disabled={saving || !score}
-                                className="btn-primary !px-2.5 !py-1.5"
-                                title="Saxla"
-                            >
+                            <button onClick={save} disabled={saving || !score} className="btn-primary !px-2.5 !py-1.5" title="Saxla">
                                 <Save className="w-3.5 h-3.5" />
                             </button>
-                            <button
-                                onClick={() => setEditing(false)}
-                                className="btn-secondary !px-2.5 !py-1.5"
-                                title="Ləğv et"
-                            >
+                            <button onClick={() => setEditing(false)} className="btn-secondary !px-2.5 !py-1.5" title="Ləğv et">
                                 <X className="w-3.5 h-3.5" />
                             </button>
                         </div>
                     </div>
                 )}
                 {appeal && !editing && (
-                    <button
-                        onClick={remove}
-                        className="btn-ghost !px-2 !py-1.5 hover:!bg-rose-50 hover:!text-rose-700"
-                        title="Sil"
-                    >
+                    <button onClick={remove} className="btn-ghost !px-2 !py-1.5 hover:!bg-rose-50 hover:!text-rose-700" title="Sil">
                         <X className="w-3.5 h-3.5" />
                     </button>
                 )}
