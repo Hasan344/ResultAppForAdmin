@@ -21,6 +21,11 @@ public interface IScoringService
     // 62 kimi çox-alt-ixtisaslı komissiyalarda hər alt-ixtisas üçün ayrı nəticə almaq üçün.
     Task<FinalScoreResult> CalculateFinalScoreAsync(
         int studentId, int examId, string? kodixtisas, CancellationToken ct = default);
+
+    // YALNIZ I MƏRHƏLƏ QAPISI — netice (mərhələ-1) faylı üçün.
+    // II mərhələ (umumi_total_xal / texniki normativlər) nəzərə alınmır.
+    Task<FinalScoreResult> EvaluateStage1Async(
+        int studentId, int examId, string? kodixtisas = null, CancellationToken ct = default);
 }
 
 public class ScoringService : IScoringService
@@ -32,6 +37,22 @@ public class ScoringService : IScoringService
 
     // Aggregation üçün daxili sadə model (StudentExamResult və ya re-score eyni yola düşür)
     private readonly record struct ScoredResult(string ExerciseCode, byte Score, bool IsRefused);
+
+    // ════════════════════════════════════════════════════════════════════════
+    // I MƏRHƏLƏ (ÜMUMİ FİZİKİ HAZIRLIQ) NORMATİVLƏRİNİN KODLARI
+    // Yalnız bunlar mərhələ-1 qapısı (stage-1 gate) sayımına daxildir. II mərhələ
+    // normativləri (umumi_total_xal, texniki bacarıqlar: ex24-27, ex69-76 və s.)
+    // bura DAXİL DEYİL — netice (mərhələ-1) faylında onlar qiymətə təsir etməməlidir.
+    // Yeni ÜFH normativi əlavə olunarsa (məs. başqa kross/sprint kodu) BURAYA əlavə et.
+    // ════════════════════════════════════════════════════════════════════════
+    private static readonly HashSet<string> Stage1UfhCodes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "sprint_100m",
+        "cross_1000m",
+        "sprint_400m",
+        "pull_up",
+        "long_jump",
+    };
 
     // ════════════════════════════════════════════════════════════════════════
     // mm.ss FORMATLI HƏRƏKƏTLƏR
@@ -182,6 +203,75 @@ public class ScoringService : IScoringService
             .FirstOrDefaultAsync(r => r.CommissionNo == student.CommissionNo, ct);
 
         return Aggregate(scored, rule);
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    // YALNIZ I MƏRHƏLƏ QAPISI — netice (mərhələ-1) faylı üçün.
+    //
+    // "Nəticə" = abituriyent I mərhələni keçdimi (→ II mərhələyə buraxılır)?
+    // II mərhələ normativləri (umumi_total_xal / texniki bacarıqlar) NƏZƏRƏ ALINMIR,
+    // çünki mərhələ-1 günü onlar hələ mövcud deyil. Tam yekun üçün → CalculateFinalScoreAsync.
+    //
+    // Qayda (commission_stage_rules) varsa: meeting >= stage1_required.
+    // Qayda yoxdursa (və ya stage1_required<=0): MÖVCUD bütün I mərhələ normativləri
+    // keçilməlidir (təhlükəsiz default — kimsə yanlışlıqla "məqbul" görünməsin).
+    //
+    // kodixtisas verilərsə RAW-dan həmin alt-ixtisasa görə yenidən puanlanır;
+    // null isə saxlanılan FinalScore istifadə olunur (manual override qorunur).
+    // ════════════════════════════════════════════════════════════════════════
+    public async Task<FinalScoreResult> EvaluateStage1Async(
+        int studentId, int examId, string? kodixtisas = null, CancellationToken ct = default)
+    {
+        var student = await _db.Students.AsNoTracking().FirstAsync(s => s.Id == studentId, ct);
+        var exam = await _db.Exams.AsNoTracking().FirstAsync(e => e.Id == examId, ct);
+        int age = student.BirthDate is null ? 0 : CalculateAge(student.BirthDate.Value, exam.ExamDate);
+
+        var results = await _db.StudentExamResults.AsNoTracking()
+            .Include(r => r.Exercise)
+            .Where(r => r.StudentId == studentId)
+            .ToListAsync(ct);
+
+        if (results.Count == 0)
+            return new FinalScoreResult(null, "Nəticə yoxdur", false);
+
+        var appeals = await _db.StudentAppealResults.AsNoTracking()
+            .Where(a => a.StudentId == studentId)
+            .ToDictionaryAsync(a => a.ExerciseId, a => a.AppealScore, ct);
+
+        // Yalnız I mərhələ (ÜFH) normativləri; II mərhələ kodları xaric.
+        var stage1 = new List<ScoredResult>();
+        foreach (var rr in results)
+        {
+            if (!Stage1UfhCodes.Contains(rr.Exercise.Code)) continue;
+
+            byte score;
+            bool refused = rr.IsRefused;
+            if (appeals.TryGetValue(rr.ExerciseId, out var ap)) { score = ap; refused = false; }
+            else if (kodixtisas is null) score = rr.FinalScore;
+            else score = await CalculateAsync(
+                student.CommissionNo, kodixtisas, rr.ExerciseId,
+                student.Gender, age, rr.RawValue, rr.IsRefused, ct);
+
+            stage1.Add(new ScoredResult(rr.Exercise.Code, score, refused));
+        }
+
+        if (stage1.Count == 0)
+            return new FinalScoreResult(null, "I mərhələ normativi yoxdur", false);
+
+        var rule = await _db.Set<CommissionStageRule>().AsNoTracking()
+            .FirstOrDefaultAsync(r => r.CommissionNo == student.CommissionNo, ct);
+
+        int minScore = rule?.MinimumScore ?? 6;
+        int required = (rule is not null && rule.Stage1Required > 0) ? rule.Stage1Required : stage1.Count;
+        int total = (rule is not null && rule.Stage1Total > 0) ? rule.Stage1Total : stage1.Count;
+
+        int meeting = stage1.Count(r => r.Score >= minScore);
+        bool passed = meeting >= required;
+
+        return new FinalScoreResult(
+            (byte)Math.Clamp(meeting, 0, 255),
+            passed ? null : $"I mərhələ: {meeting}/{total} ≥{minScore} (tələb {required})",
+            passed);
     }
 
     // ════════════════════════════════════════════════════════════════════════

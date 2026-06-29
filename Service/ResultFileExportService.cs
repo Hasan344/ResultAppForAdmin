@@ -1,5 +1,6 @@
 using ClosedXML.Excel;
 using Microsoft.EntityFrameworkCore;
+using ResultAppForAdmin.Api.Domain.Entities.New;
 using ResultAppForAdmin.Api.Infrastructure.Persistence;
 
 namespace ResultAppForAdmin.Api.Application.Services;
@@ -10,14 +11,19 @@ public interface IResultFileExportService
     /// Bir imtahan üçün rəsmi nəticə Excel-ini byte[] kimi qaytarır.
     /// qrupNum / commissionNo / altNov opsional filtrlərdir.
     /// altNov verilərsə yalnız həmin alt-ixtisasın tələbələri daxil olunur.
+    ///
+    /// stage1Only = true → "Nəticə" sütunu YALNIZ I mərhələ qapısını göstərir
+    /// (abituriyent II mərhələyə buraxılırmı). Mərhələ-1 günü (ex79 / II mərhələ
+    /// normativləri hələ yoxkən) çıxarılan netice faylları üçün bunu true ver.
     /// </summary>
     Task<byte[]> ExportAsync(
     int examId,
     int? qrupNum = null,
     string? commissionNo = null,
-    string? rescoreKodixtisas = null,   
-    string? subProfessionLabel = null,  
-    int? fennKod = null,                
+    string? rescoreKodixtisas = null,
+    string? subProfessionLabel = null,
+    int? fennKod = null,
+    bool stage1Only = false,
     CancellationToken ct = default);
 }
 
@@ -44,13 +50,14 @@ public class ResultFileExportService : IResultFileExportService
     string? rescoreKodixtisas = null,
     string? subProfessionLabel = null,
     int? fennKod = null,
+    bool stage1Only = false,
         CancellationToken ct = default)
     {
         // ── Tələbələr ────────────────────────────────────────────────────────
         var q = _db.Students.AsNoTracking().Where(s => s.ExamId == examId);
         if (qrupNum.HasValue) q = q.Where(s => s.QrupNum == qrupNum.Value);
         if (!string.IsNullOrEmpty(commissionNo)) q = q.Where(s => s.CommissionNo == commissionNo);
-      
+
         var students = await q
             .OrderBy(s => s.QrupNum).ThenBy(s => s.SNomer)
             .ToListAsync(ct);
@@ -60,12 +67,18 @@ public class ResultFileExportService : IResultFileExportService
                 $"examId={examId} üçün (filtrlərlə) tələbə tapılmadı");
 
         // ── Keç/qal map-i (view → StudentId → IsPassed) ──────────────────────
+        // stage1Only=true → yalnız I mərhələ qapısı (II mərhələ / ex79 nəzərə alınmır)
         var passMap = new Dictionary<int, bool>(students.Count);
         foreach (var s in students)
         {
-            var fr = rescoreKodixtisas is null
-                ? await _scoring.CalculateFinalScoreAsync(s.Id, examId, ct)
-                : await _scoring.CalculateFinalScoreAsync(s.Id, examId, rescoreKodixtisas, ct);
+            FinalScoreResult fr;
+            if (stage1Only)
+                fr = await _scoring.EvaluateStage1Async(s.Id, examId, rescoreKodixtisas, ct);
+            else
+                fr = rescoreKodixtisas is null
+                    ? await _scoring.CalculateFinalScoreAsync(s.Id, examId, ct)
+                    : await _scoring.CalculateFinalScoreAsync(s.Id, examId, rescoreKodixtisas, ct);
+
             passMap[s.Id] = fr.Passed;
         }
 
@@ -124,8 +137,8 @@ public class ResultFileExportService : IResultFileExportService
         wb.SaveAs(ms);
 
         _log.LogInformation(
-            "ResultFile export: examId={ExamId} qrup={Qrup} comm={Comm} kodixtisas={AltNov} rows={Rows}",
-            examId, qrupNum, commissionNo, fennKod, students.Count);
+            "ResultFile export: examId={ExamId} qrup={Qrup} comm={Comm} kodixtisas={AltNov} stage1Only={Stage1} rows={Rows}",
+            examId, qrupNum, commissionNo, fennKod, stage1Only, students.Count);
 
         return ms.ToArray();
     }
